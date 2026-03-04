@@ -13,24 +13,52 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
+// Helper function to execute a command and return output as a promise
+function executeCommand(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args);
+    let output = '';
+    let errorOutput = '';
+
+    child.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    child.on('close', (code) => {
+      resolve(output + errorOutput);
+    });
+
+    child.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
 // API endpoint to run network tools
 app.post('/api/net-tool', (req, res) => {
   // Destructure new parameters
-  const { tool, host, dnsServer, port, protocol, debug } = req.body;
-
-  let command;
-  let args = [];
+  const { tool, host, hosts, dnsServer, port, protocol, debug } = req.body;
 
   // --- Input Sanitization and Command Building ---
 
   // Whitelist allowed tools
-  if (!['ping', 'nslookup', 'traceroute', 'mtr', 'openssl_sconnect'].includes(tool)) {
+  if (!['ping', 'nslookup', 'nslookup_bulk', 'traceroute', 'mtr', 'openssl_sconnect'].includes(tool)) {
     return res.status(400).send('Error: Invalid tool specified.');
   }
 
   // Sanitize host: Allow FQDNs, IPv4, and IPv6
-  if (!host || !/^[a-zA-Z0-9\.:\-\_]+$/.test(host)) {
+  // For bulk nslookup, host is not required
+  if (tool !== 'nslookup_bulk' && (!host || !/^[a-zA-Z0-9\.:\-\_]+$/.test(host))) {
     return res.status(400).send('Error: Invalid hostname or IP address.');
+  }
+
+  // Validate hosts for bulk nslookup
+  if (tool === 'nslookup_bulk' && !hosts) {
+    return res.status(400).send('Error: Please provide hosts for bulk lookup.');
   }
 
   // Sanitize DNS server (if provided)
@@ -60,6 +88,70 @@ app.post('/api/net-tool', (req, res) => {
   
   // --- End Sanitization ---
 
+  // Special handling for bulk nslookup
+  if (tool === 'nslookup_bulk') {
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    (async () => {
+      try {
+        // Parse hosts from the input (one per line)
+        const hostList = hosts
+          .split('\n')
+          .map(h => h.trim())
+          .filter(h => h.length > 0);
+
+        if (hostList.length === 0) {
+          res.write('Error: No valid hosts provided.');
+          res.end();
+          return;
+        }
+
+        res.write(`Performing NSLookup on ${hostList.length} host(s)...\n\n`);
+
+        // Process each host sequentially
+        for (let i = 0; i < hostList.length; i++) {
+          const queryHost = hostList[i];
+
+          // Validate each host
+          if (!/^[a-zA-Z0-9\.:\-\_]+$/.test(queryHost)) {
+            res.write(`\n[${i + 1}/${hostList.length}] Skipping invalid host: ${queryHost}\n`);
+            continue;
+          }
+
+          res.write(`\n[${i + 1}/${hostList.length}] NSLookup: ${queryHost}\n`);
+          res.write(`${'='.repeat(60)}\n`);
+
+          try {
+            const args = [];
+            if (isDebug) {
+              args.push('-debug');
+            }
+            args.push(queryHost);
+            if (dnsServer) {
+              args.push(dnsServer);
+            }
+
+            const output = await executeCommand('nslookup', args);
+            res.write(output);
+          } catch (err) {
+            res.write(`Error executing nslookup: ${err.message}\n`);
+          }
+        }
+
+        res.write(`\n\n--- Bulk NSLookup completed ---`);
+        res.end();
+      } catch (err) {
+        console.error('Bulk nslookup error:', err);
+        res.write(`\n--- ERROR: ${err.message} ---`);
+        res.end();
+      }
+    })();
+    return; // Exit early, don't process further
+  }
+
+  let command;
+  let args = [];
 
   switch (tool) {
     case 'ping':

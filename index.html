@@ -41,7 +41,7 @@
       </header>
 
       <!-- Controls -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-4 items-end">
+      <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-4 items-start">
         
         <!-- Tool Selector -->
         <div class="md:col-span-1">
@@ -49,6 +49,7 @@
           <select id="tool-select" class="w-full bg-white border border-gray-300 text-gray-900 rounded-lg p-3 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
             <option value="ping">Ping</option>
             <option value="nslookup">NSLookup</option>
+            <option value="nslookup_bulk">NSLookup (Bulk)</option>
             <option value="traceroute">Traceroute</option>
             <option value="mtr">TCP Traceroute</option>
             <option value="openssl_sconnect">TLS Handshake</option>
@@ -56,9 +57,15 @@
         </div>
         
         <!-- Host Input -->
-        <div class="md:col-span-2">
+        <div id="host-container" class="hidden md:col-span-2">
           <label for="host-input" class="block text-sm font-medium text-gray-700 mb-1">Hostname or IP Address</label>
           <input type="text" id="host-input" placeholder="e.g., google.com or 8.8.8.8" class="w-full bg-white border border-gray-300 text-gray-900 rounded-lg p-3 placeholder-gray-400 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
+        </div>
+
+        <!-- Bulk Hosts Input -->
+        <div id="bulk-hosts-container" class="hidden md:col-span-2">
+          <label for="bulk-hosts-input" class="block text-sm font-medium text-gray-700 mb-1">Hosts (one per line)</label>
+          <textarea id="bulk-hosts-input" placeholder="google.com&#10;8.8.8.8&#10;cloudflare.com" class="w-full bg-white border border-gray-300 text-gray-900 rounded-lg p-3 placeholder-gray-400 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none" rows="3"></textarea>
         </div>
 
         <!-- NSLookup Options -->
@@ -126,6 +133,8 @@
       const dnsOptions = document.getElementById('dns-options');
       const mtrOptions = document.getElementById('mtr-options');
       const portOption = document.getElementById('port-option');
+      const HostContainer = document.getElementById('host-container');
+      const bulkHostsContainer = document.getElementById('bulk-hosts-container');
       
       // Specific inputs
       const dnsServerInput = document.getElementById('dns-server-input');
@@ -135,6 +144,7 @@
       const portInput = document.getElementById('port-input');
       const opensslDebugCheckbox= document.getElementById('openssl-debug-checkbox');
       const opensslOption= document.getElementById('openssl-option');
+      const bulkHostsInput = document.getElementById('bulk-hosts-input');
 
       // Function to update UI based on tool selection
       function updateToolOptions() {
@@ -146,16 +156,27 @@
         portOption.classList.add('hidden');
         opensslDebugCheckbox.classList.add('hidden');
         opensslOption.classList.add('hidden');
+        bulkHostsContainer.classList.add('hidden');
+        HostContainer.classList.add('hidden');
 
         // Show relevant containers
         if (selectedTool === 'nslookup') {
+          HostContainer.classList.remove('hidden');
           dnsOptions.classList.remove('hidden');
+        } else if (selectedTool === 'nslookup_bulk') {
+          dnsOptions.classList.remove('hidden');
+          bulkHostsContainer.classList.remove('hidden');
+          HostContainer.classList.add('hidden');
         } else if (selectedTool === 'mtr') {
+          HostContainer.classList.remove('hidden');
           mtrOptions.classList.remove('hidden');
         } else if (selectedTool === 'openssl_sconnect') {
+          HostContainer.classList.remove('hidden');
           portOption.classList.remove('hidden');
           opensslDebugCheckbox.classList.remove('hidden');
           opensslOption.classList.remove('hidden');
+        } else {
+          HostContainer.classList.remove('hidden');
         }
       }
 
@@ -173,16 +194,30 @@
       runButton.addEventListener('click', async () => {
         const tool = toolSelect.value;
         const host = hostInput.value;
+        const bulkHosts = bulkHostsInput.value;
 
-        if (!host) {
-          output.textContent = 'Error: Please enter a hostname or IP address.';
-          return;
+        // Validate input based on tool type
+        if (tool === 'nslookup_bulk') {
+          if (!bulkHosts.trim()) {
+            output.textContent = 'Error: Please enter one or more hostnames or IP addresses.';
+            return;
+          }
+        } else {
+          if (!host) {
+            output.textContent = 'Error: Please enter a hostname or IP address.';
+            return;
+          }
         }
         
         // Disable button and show loading state
         runButton.disabled = true;
         runButton.textContent = 'Running...';
-        output.textContent = `Running ${tool} on ${host}...\n\n`;
+        
+        if (tool === 'nslookup_bulk') {
+          output.textContent = `Running bulk ${tool.replace('_', ' ')}...\n\n`;
+        } else {
+          output.textContent = `Running ${tool} on ${host}...\n\n`;
+        }
 
         // Collect all optional parameters
         let port = null;
@@ -190,10 +225,10 @@
         let debug = false;
         let dnsServer = null;
         
-        if (tool === 'nslookup') {
+        if (tool === 'nslookup' || tool === 'nslookup_bulk') {
           dnsServer = dnsServerInput.value;
           debug = nslookupDebugCheckbox.checked;
-          if(dnsServer) {
+          if(dnsServer && tool === 'nslookup') {
             output.textContent = `Running ${tool} on ${host} using server ${dnsServer}...\n\n`;
           }
         } else if (tool === 'mtr') {
@@ -211,7 +246,8 @@
             },
             body: JSON.stringify({ 
               tool, 
-              host, 
+              host: tool === 'nslookup_bulk' ? undefined : host,
+              hosts: tool === 'nslookup_bulk' ? bulkHosts : undefined,
               dnsServer: dnsServer || undefined,
               port: port || undefined,
               protocol: protocol || undefined,
