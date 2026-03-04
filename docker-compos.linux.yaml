@@ -1,0 +1,15 @@
+# Use the following command to run in linux
+# docker compose -f docker-compose.yml -f docker-compose.linux.yml up --build
+
+services:
+  net-tools-app:
+    build:
+      context: .
+      network: host
+    ports: [] # disable port mapping
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    network_mode: host
+    restart: always
+    container_name: net-tools

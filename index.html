@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-100"> <!-- Changed background to light gray -->
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZTNA Network Testing Tools</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Custom scrollbar for the dark output box */
+    pre::-webkit-scrollbar {
+      width: 8px;
+    }
+    pre::-webkit-scrollbar-track {
+      background: #1f2937; /* gray-800 */
+    }
+    pre::-webkit-scrollbar-thumb {
+      background: #4b5563; /* gray-600 */
+      border-radius: 4px;
+    }
+    pre::-webkit-scrollbar-thumb:hover {
+      background: #6b7280; /* gray-500 */
+    }
+    /* Hide number input arrows */
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+  </style>
+</head>
+<body class="h-full font-sans text-gray-900"> <!-- Default text to dark -->
+  <!-- Main container with white background and shadow -->
+  <div class="flex flex-col h-full max-w-4xl min-w-[360px] mx-auto p-4 md:p-8">
+    <div class="bg-white shadow-lg rounded-lg p-6 md:p-8">
+      
+      <!-- Header -->
+      <header class="mb-6">
+        <!-- Absa Red text color -->
+        <h1 class="text-3xl font-bold text-[#9D003A] text-center">ZTNA Network Testing Tools</h1>
+        <p class="text-center text-gray-600 mt-2">Web based network diagnostic tool set.</p>
+      </header>
+
+      <!-- Controls -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-4 items-end">
+        
+        <!-- Tool Selector -->
+        <div class="md:col-span-1">
+          <label for="tool-select" class="block text-sm font-medium text-gray-700 mb-1">Tool</label>
+          <select id="tool-select" class="w-full bg-white border border-gray-300 text-gray-900 rounded-lg p-3 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
+            <option value="ping">Ping</option>
+            <option value="nslookup">NSLookup</option>
+            <option value="traceroute">Traceroute</option>
+            <option value="mtr">TCP Traceroute</option>
+            <option value="openssl_sconnect">TLS Handshake</option>
+          </select>
+        </div>
+        
+        <!-- Host Input -->
+        <div class="md:col-span-2">
+          <label for="host-input" class="block text-sm font-medium text-gray-700 mb-1">Hostname or IP Address</label>
+          <input type="text" id="host-input" placeholder="e.g., google.com or 8.8.8.8" class="w-full bg-white border border-gray-300 text-gray-900 rounded-lg p-3 placeholder-gray-400 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
+        </div>
+
+        <!-- NSLookup Options -->
+        <div id="dns-options" class="hidden sm:col-span-2 md:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label for="dns-server-input" class="block text-sm font-medium text-gray-700 mb-1">DNS Server (Optional)</label>
+            <input type="text" id="dns-server-input" placeholder="e.g., 1.1.1.1" class="w-full bg-white border border-gray-300 text-gray-900 rounded-lg p-3 placeholder-gray-400 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
+          </div>
+          <div class="flex items-center pt-6">
+            <input id="nslookup-debug-checkbox" type="checkbox" class="h-4 w-4 text-[#9D003A] border-gray-300 rounded focus:ring-[#9D003A]">
+            <label for="nslookup-debug-checkbox" class="ml-2 block text-sm text-gray-900">
+              Enable debug output
+            </label>
+          </div>
+        </div>
+        
+        <!-- MTR Options -->
+        <div id="mtr-options" class="hidden sm:col-span-2 md:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label for="mtr-port-input" class="block text-sm font-medium text-gray-700 mb-1">TCP Port</label>
+            <input type="number" id="mtr-port-input" placeholder="Default: 443" min="1" max="65535" class="w-full bg-white border border-gray-300 text-gray-900 rounded-lg p-3 placeholder-gray-400 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
+          </div>
+        </div>
+        
+        <!-- OpenSSL Port Option -->
+        <div id="port-option" class="hidden">
+          <label for="port-input" class="block text-sm font-medium text-gray-700 mb-1">Port (Optional)</label>
+          <input type="number" id="port-input" placeholder="Default: 443" min="1" max="65535" class="w-full bg-white border border-gray-300 text-gray-900 rounded-lg p-3 placeholder-gray-400 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
+        </div>
+        <div id="openssl-option" class="flex items-center h-[50px] mb-px">
+          <input id="openssl-debug-checkbox" type="checkbox" class="h-4 w-4 text-[#9D003A] border-gray-300 rounded focus:ring-[#9D003A]">
+          <label for="openssl-debug-checkbox" class="ml-2 block text-sm text-gray-900">
+            Output certs
+          </label>
+        </div>
+
+        <!-- Run Button -->
+        <div class="sm:col-span-2 md:col-span-3 md:flex md:justify-end">
+          <button id="run-button" class="w-full md:w-auto bg-[#9D003A] hover:bg-[#72002E] text-white font-bold py-3 px-6 rounded-lg transition duration-200 focus:outline-none focus:ring-2 focus:ring-[#9D003A] focus:ring-offset-2 focus:ring-offset-white disabled:opacity-50 disabled:cursor-not-allowed">
+            Run
+          </button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Output Area -->
+    <div class="flex-grow flex flex-col bg-gray-900 rounded-lg border border-gray-700 overflow-hidden shadow-lg mt-6">
+      <div class="px-4 py-2 bg-gray-800 border-b border-gray-700">
+        <h2 class="text-lg font-semibold text-white">Output</h2>
+      </div>
+      <pre id="output" class="flex-grow p-4 font-mono text-sm text-gray-300 overflow-auto whitespace-pre-wrap break-words">Waiting for command...</pre>
+    </div>
+
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // Get all elements
+      const toolSelect = document.getElementById('tool-select');
+      const hostInput = document.getElementById('host-input');
+      const runButton = document.getElementById('run-button');
+      const output = document.getElementById('output');
+      
+      // Option containers
+      const dnsOptions = document.getElementById('dns-options');
+      const mtrOptions = document.getElementById('mtr-options');
+      const portOption = document.getElementById('port-option');
+      
+      // Specific inputs
+      const dnsServerInput = document.getElementById('dns-server-input');
+      const nslookupDebugCheckbox = document.getElementById('nslookup-debug-checkbox');
+      const mtrProtocolSelect = document.getElementById('mtr-protocol-select');
+      const mtrPortInput = document.getElementById('mtr-port-input');
+      const portInput = document.getElementById('port-input');
+      const opensslDebugCheckbox= document.getElementById('openssl-debug-checkbox');
+      const opensslOption= document.getElementById('openssl-option');
+
+      // Function to update UI based on tool selection
+      function updateToolOptions() {
+        const selectedTool = toolSelect.value;
+        
+        // Hide all optional containers
+        dnsOptions.classList.add('hidden');
+        mtrOptions.classList.add('hidden');
+        portOption.classList.add('hidden');
+        opensslDebugCheckbox.classList.add('hidden');
+        opensslOption.classList.add('hidden');
+
+        // Show relevant containers
+        if (selectedTool === 'nslookup') {
+          dnsOptions.classList.remove('hidden');
+        } else if (selectedTool === 'mtr') {
+          mtrOptions.classList.remove('hidden');
+        } else if (selectedTool === 'openssl_sconnect') {
+          portOption.classList.remove('hidden');
+          opensslDebugCheckbox.classList.remove('hidden');
+          opensslOption.classList.remove('hidden');
+        }
+      }
+
+      // Show/hide options on tool change
+      toolSelect.addEventListener('change', updateToolOptions);
+      
+      // Manually trigger on load to set initial state
+      updateToolOptions();
+
+      // Allow pressing Enter in the input field to run the command
+      hostInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') e.preventDefault();
+      });
+
+      runButton.addEventListener('click', async () => {
+        const tool = toolSelect.value;
+        const host = hostInput.value;
+
+        if (!host) {
+          output.textContent = 'Error: Please enter a hostname or IP address.';
+          return;
+        }
+        
+        // Disable button and show loading state
+        runButton.disabled = true;
+        runButton.textContent = 'Running...';
+        output.textContent = `Running ${tool} on ${host}...\n\n`;
+
+        // Collect all optional parameters
+        let port = null;
+        let protocol = null;
+        let debug = false;
+        let dnsServer = null;
+        
+        if (tool === 'nslookup') {
+          dnsServer = dnsServerInput.value;
+          debug = nslookupDebugCheckbox.checked;
+          if(dnsServer) {
+            output.textContent = `Running ${tool} on ${host} using server ${dnsServer}...\n\n`;
+          }
+        } else if (tool === 'mtr') {
+          port = mtrPortInput.value || '443';
+        } else if (tool === 'openssl_sconnect') {
+          port = portInput.value || '443'; // Default to 443
+          debug = opensslDebugCheckbox.checked;
+        }
+
+        try {
+          const response = await fetch('/api/net-tool', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ 
+              tool, 
+              host, 
+              dnsServer: dnsServer || undefined,
+              port: port || undefined,
+              protocol: protocol || undefined,
+              debug: debug
+            })
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `Server responded with status: ${response.status}`);
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value, { stream: true });
+            output.textContent += chunk;
+            output.scrollTop = output.scrollHeight;
+          }
+
+        } catch (error) {
+          console.error('Fetch error:', error);
+          output.textContent += `\n--- ERROR ---\n${error.message}`;
+        } finally {
+          runButton.disabled = false;
+          runButton.textContent = 'Run';
+        }
+      });
+    });
+  </script>
+
+</body>
+</html>
+

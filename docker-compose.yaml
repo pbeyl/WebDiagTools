@@ -1,0 +1,10 @@
+services:
+  net-tools-app:
+    build: .
+    ports:
+      - "8080:8080"
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    restart: always
+    container_name: net-tools
