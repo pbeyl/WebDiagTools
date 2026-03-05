@@ -41,7 +41,7 @@ function executeCommand(command, args) {
 // API endpoint to run network tools
 app.post('/api/net-tool', (req, res) => {
   // Destructure new parameters
-  const { tool, host, hosts, dnsServer, port, protocol, debug } = req.body;
+  const { tool, host, hosts, dnsServer, recordType, port, protocol, debug } = req.body;
 
   // --- Input Sanitization and Command Building ---
 
@@ -65,7 +65,17 @@ app.post('/api/net-tool', (req, res) => {
   if (dnsServer && !/^[a-zA-Z0-9\.:\-\_]+$/.test(dnsServer)) {
     return res.status(400).send('Error: Invalid DNS server address.');
   }
-  
+  // Validate and normalize record type (if provided)
+  let validRecordType = null;
+  if (recordType) {
+    const allowedTypes = ['A','AAAA','CNAME','MX','TXT','NS','SOA','PTR','SRV','ANY'];
+    const up = recordType.toString().toUpperCase();
+    if (allowedTypes.includes(up)) {
+      validRecordType = up;
+    } else {
+      return res.status(400).send('Error: Invalid DNS record type specified.');
+    }
+  }  
   // Sanitize Port (if provided)
   let validPort = null;
   if (port) {
@@ -127,6 +137,9 @@ app.post('/api/net-tool', (req, res) => {
             if (isDebug) {
               args.push('-debug');
             }
+            if (validRecordType) {
+              args.push(`-type=${validRecordType}`);
+            }
             args.push(queryHost);
             if (dnsServer) {
               args.push(dnsServer);
@@ -165,12 +178,14 @@ app.post('/api/net-tool', (req, res) => {
       if (isDebug) {
         args.push('-debug');
       }
+      if (validRecordType) {
+        args.push(`-type=${validRecordType}`);
+      }
       args.push(host);
       if (dnsServer) {
         args.push(dnsServer);
       }
       break;
-      
     case 'traceroute':
       command = 'traceroute';
       args = ['-w', '3', '-q', '1', '-m', '20', host];
