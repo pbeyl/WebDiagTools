@@ -41,12 +41,12 @@ function executeCommand(command, args) {
 // API endpoint to run network tools
 app.post('/api/net-tool', (req, res) => {
   // Destructure new parameters
-  const { tool, host, hosts, dnsServer, recordType, port, protocol, debug } = req.body;
+  const { tool, host, hosts, dnsServer, recordType, packetSize, dontFrag, port, protocol, debug } = req.body;
 
   // --- Input Sanitization and Command Building ---
 
   // Whitelist allowed tools
-  if (!['ping', 'nslookup', 'nslookup_bulk', 'traceroute', 'mtr', 'openssl_sconnect'].includes(tool)) {
+  if (!['ping', 'nslookup', 'nslookup_bulk', 'traceroute', 'mtr', 'openssl_sconnect', 'curl'].includes(tool)) {
     return res.status(400).send('Error: Invalid tool specified.');
   }
 
@@ -65,6 +65,7 @@ app.post('/api/net-tool', (req, res) => {
   if (dnsServer && !/^[a-zA-Z0-9\.:\-\_]+$/.test(dnsServer)) {
     return res.status(400).send('Error: Invalid DNS server address.');
   }
+
   // Validate and normalize record type (if provided)
   let validRecordType = null;
   if (recordType) {
@@ -75,7 +76,20 @@ app.post('/api/net-tool', (req, res) => {
     } else {
       return res.status(400).send('Error: Invalid DNS record type specified.');
     }
-  }  
+  }
+
+  // Validate ping packet size and don't fragment (if provided)
+  let validPacketSize = null;
+  const dontFragment = !!dontFrag;
+  if (packetSize) {
+    const ps = parseInt(packetSize, 10);
+    if (!isNaN(ps) && ps >= 0 && ps <= 65535) {
+      validPacketSize = ps;
+    } else {
+      return res.status(400).send('Error: Invalid packet size specified.');
+    }
+  }
+  
   // Sanitize Port (if provided)
   let validPort = null;
   if (port) {
@@ -89,8 +103,11 @@ app.post('/api/net-tool', (req, res) => {
   const connectPort = validPort || 443; // Default to 443
   
   // Sanitize Protocol (if provided)
-  if (protocol && !['tcp', 'udp'].includes(protocol)) {
-    return res.status(400).send('Error: Invalid protocol specified.');
+  if (protocol) {
+    const allowedProtocols = ['tcp', 'udp', 'http', 'https'];
+    if (!allowedProtocols.includes(protocol)) {
+      return res.status(400).send('Error: Invalid protocol specified.');
+    }
   }
   
   // Sanitize Debug (if provided)
@@ -169,7 +186,16 @@ app.post('/api/net-tool', (req, res) => {
   switch (tool) {
     case 'ping':
       command = 'ping';
-      args = ['-c', '4', host];
+      args = ['-c', '4'];
+      if (validPacketSize !== null) {
+        args.push('-s', validPacketSize.toString());
+      }
+      if (dontFragment) {
+        // ping options vary; try common flags
+        args.push('-M', 'do');
+        args.push('-D');
+      }
+      args.push(host);
       break;
       
     case 'nslookup':
@@ -216,6 +242,20 @@ app.post('/api/net-tool', (req, res) => {
       } else {
         args.push('-showcerts');
       }
+      break;
+
+    case 'curl':
+      command = 'curl';
+      const curlProtocol = (protocol === 'http') ? 'http' : 'https';
+      const curlPort = validPort ? `:${validPort}` : '';
+      const curlUrl = `${curlProtocol}://${host}${curlPort}`;
+      args = [
+        '-s',
+        '-S',
+        '-o', '/dev/null',
+        '-w', '\nHTTP Code: %{http_code}\nDNS Lookup: %{time_namelookup}s\nTLS Handshake: %{time_appconnect}s\nTime to First Byte: %{time_starttransfer}s\nTotal Time: %{time_total}s\n',
+        curlUrl
+      ];
       break;
   }
 

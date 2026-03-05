@@ -10,7 +10,8 @@ WORKDIR /app
 # - bind-tools: for nslookup/dig
 # - mtr: for mtr
 # - openssl: for openssl s_connect
-RUN apk add --no-cache iputils traceroute bind-tools mtr openssl
+# - curl: for curl HTTP timing stats
+RUN apk add --no-cache iputils traceroute bind-tools mtr openssl curl
 
 # Copy package.json and package-lock.json
 COPY package.json ./
