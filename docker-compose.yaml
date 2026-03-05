@@ -6,5 +6,7 @@ services:
     cap_add:
       - NET_RAW
       - NET_ADMIN
+    volumes:
+      - ./data:/app/data
     restart: always
     container_name: net-tools

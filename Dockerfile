@@ -19,6 +19,9 @@ COPY package.json ./
 # Install Node.js dependencies
 RUN npm install
 
+# Create data directory for persistent SQLite database
+RUN mkdir -p /app/data && chown -R node:node /app/data
+
 # Copy the rest of the application source code
 COPY . .
 

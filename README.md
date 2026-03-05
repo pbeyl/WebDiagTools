@@ -6,9 +6,14 @@ Web-based network diagnostic toolset that exposes common tools (ping, nslookup, 
 ## Features
 
 - Web UI for running common network diagnostics
+- Role-based access control with user accounts and permissions
+- Administrative panel for user and permission management
+- Password reset via email link
+- In-app “Reset Password” option (menu) for authenticated users
 - Streaming command output to the browser
-- API endpoint for programmatic use: `/api/net-tool`
+- API endpoint for programmatic use: `/api/net-tool` (requires login)
 - Container-friendly (Dockerfile + docker-compose included)
+- SQLite database persisted in a mounted volume (data/ztna-tools.db)
 
 ## Prerequisites
 
@@ -132,7 +137,7 @@ The server streams subprocess `stdout` and `stderr` directly back in the respons
 ## Files of Interest
 
 - `server.js` — Express server and tool execution logic (API implementation)
-- `index.html` — Front-end UI
+- `dashboard.html` — Front-end UI
 - `Dockerfile` — Container image definition
 - `docker-compose.yaml` and `docker-compos.linux.yaml` — Compose files for container runs
 
