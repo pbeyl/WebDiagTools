@@ -37,6 +37,13 @@ const { authMiddleware, requireAdmin, generateToken } = require('./auth');
 
 const app = express();
 const port = process.env.PORT || 8080;
+const appUrl = process.env.APP_URL || '';
+const isProduction = process.env.NODE_ENV === 'production';
+const cookieSecure = appUrl.startsWith('https://') || (!appUrl && isProduction);
+
+// View engine setup
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
 
 // Middleware
 app.use(express.json());
@@ -54,13 +61,13 @@ const transporter = nodemailer.createTransport({
   } : undefined
 });
 
-// Public routes - serve login page
+// Public routes - serve login or dashboard page
 app.get('/', (req, res) => {
   const token = req.cookies?.token;
   if (token) {
-    res.sendFile(path.join(__dirname, 'dashboard.html'));
+    res.render('dashboard');
   } else {
-    res.sendFile(path.join(__dirname, 'login.html'));
+    res.render('login');
   }
 });
 
@@ -93,7 +100,7 @@ app.post('/api/auth/login', (req, res) => {
 
   res.cookie('token', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: cookieSecure,
     sameSite: 'strict',
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   });
@@ -754,6 +761,7 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
       args = [
         '-s',
         '-S',
+        '-k',
         '-o', '/dev/null',
         '-w', '\nHTTP Code: %{http_code}\nDNS Lookup: %{time_namelookup}s\nTLS Handshake: %{time_appconnect}s\nTime to First Byte: %{time_starttransfer}s\nTotal Time: %{time_total}s\n',
         curlUrl
@@ -799,19 +807,19 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
 
 // Serve additional pages
 app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dashboard.html'));
+  res.render('dashboard');
 });
 
 app.get('/admin', (req, res) => {
-  res.sendFile(path.join(__dirname, 'admin.html'));
+  res.render('admin');
 });
 
 app.get('/reset-password', (req, res) => {
-  res.sendFile(path.join(__dirname, 'reset-password.html'));
+  res.render('reset-password');
 });
 
-// Serve static assets (if any)
-app.use(express.static(path.join(__dirname, 'public')));
+// Serve static assets
+app.use('/static', express.static(path.join(__dirname, 'static')));
 
 app.listen(port, () => {
   console.log(`ZTNA Net-Tools listening on port ${port}`);

@@ -63,7 +63,7 @@ With these prerequisites satisfied you can either run the project using Docker (
 
 The repository includes a `Dockerfile` and `docker-compose.yaml` for an easy build + run.
 
-Build and run with Docker Compose:
+Build and run with Docker Compose (with Caddy reverse proxy and self-signed TLS):
 
 ```bash
 # From the project root (where docker-compose.yaml lives)
@@ -72,14 +72,22 @@ docker compose up --build -d
 docker-compose up --build -d
 ```
 
-The compose file maps port `8080` on the host to the container. If you need raw network capabilities (ICMP, traceroute, mtr) the compose file already requests `NET_RAW` and `NET_ADMIN` capabilities; for a Linux host you may alternatively use the provided linux variant which uses `network_mode: host`:
+By default, Caddy will:
+
+- Terminate HTTPS with a self-signed certificate issued by its internal CA.
+- Serve the app on the hostname from `APP_HOST` (which must match the host part of `APP_URL`).
+- Reverse proxy requests to the application container on port `8080`.
+
+Once running, open your browser to your configured URL, for example: `https://tools.example.com`. Because the certificate is self-signed, you will need to trust it in your browser/OS.
+
+If you need raw network capabilities (ICMP, traceroute, mtr) the compose file already requests `NET_RAW` and `NET_ADMIN` capabilities; for a Linux host you may alternatively use the provided linux variant which uses `network_mode: host`:
 
 ```bash
 # linux-specific compose override (uses host networking)
-docker compose -f docker-compose.yml -f docker-compos.linux.yaml up --build -d
+docker compose -f docker-compose.yaml -f docker-compose.linux.yaml up --build -d
 ```
 
-Or build and run the container manually (example with capabilities):
+Or build and run the container manually (example with capabilities, without Caddy/TLS):
 
 ```bash
 docker build -t net-tools .

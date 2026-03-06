@@ -1,0 +1,15 @@
+{$APP_HOST:localhost} {
+  encode gzip
+
+  tls internal
+
+  @rootPath path /
+  handle @rootPath {
+    reverse_proxy {$UPSTREAM:net-tools-app:8080}
+  }
+
+  handle {
+    reverse_proxy {$UPSTREAM:net-tools-app:8080}
+  }
+}
+
