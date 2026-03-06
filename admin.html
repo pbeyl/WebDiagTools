@@ -68,11 +68,6 @@
       <div class="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-xl font-bold text-gray-900">Reset Password</h2>
-          <button id="close-reset-modal" class="text-gray-400 hover:text-gray-600">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
         </div>
         <form id="reset-password-form" class="space-y-4">
           <div>
@@ -84,6 +79,7 @@
             <input type="password" id="confirm-password" required class="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded p-2 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
           </div>
           <div id="password-error" class="hidden text-red-600 text-sm"></div>
+          <div id="password-success" class="hidden text-green-600 text-sm"></div>
           <div class="flex gap-2 pt-2">
             <button type="button" id="cancel-reset" class="flex-1 px-4 py-2 text-gray-700 bg-gray-200 hover:bg-gray-300 rounded font-semibold transition">
               Cancel
@@ -93,6 +89,9 @@
             </button>
           </div>
         </form>
+        <div id="success-actions" class="hidden flex gap-2 pt-2">
+          <button id="logout-after-reset" class="w-full px-4 py-2 text-white bg-[#9D003A] hover:bg-[#72002E] rounded font-semibold transition">Logout</button>
+        </div>
       </div>
     </div>
 
@@ -319,12 +318,14 @@
     // Reset Password Modal element references (needed early for DOMContentLoaded)
     const resetPasswordBtn = document.getElementById('reset-password-btn');
     const resetPasswordModal = document.getElementById('reset-password-modal');
-    const closeResetModalBtn = document.getElementById('close-reset-modal');
     const cancelResetBtn = document.getElementById('cancel-reset');
     const resetPasswordForm = document.getElementById('reset-password-form');
     const newPasswordInput = document.getElementById('new-password');
     const confirmPasswordInput = document.getElementById('confirm-password');
     const passwordError = document.getElementById('password-error');
+    const passwordSuccess = document.getElementById('password-success');
+    const successActions = document.getElementById('success-actions');
+    const logoutAfterResetBtn = document.getElementById('logout-after-reset');
 
     // Initialize
     document.addEventListener('DOMContentLoaded', async () => {
@@ -336,7 +337,6 @@
         // Check if forced password change required after user is loaded
         if (requirePasswordChange) {
           resetPasswordModal.classList.remove('hidden');
-          closeResetModalBtn.style.display = 'none';
           cancelResetBtn.style.display = 'none';
         }
       } catch (err) {
@@ -417,9 +417,11 @@
       resetPasswordModal.classList.add('hidden');
       resetPasswordForm.reset();
       passwordError.classList.add('hidden');
+      passwordSuccess.classList.add('hidden');
+      successActions.classList.add('hidden');
+      resetPasswordForm.style.display = 'block';
     }
 
-    closeResetModalBtn.addEventListener('click', closeResetPasswordModal);
     cancelResetBtn.addEventListener('click', closeResetPasswordModal);
 
     // Close modal when clicking outside
@@ -464,21 +466,32 @@
           const data = await response.json();
           passwordError.textContent = data.error || 'Failed to change password';
           passwordError.classList.remove('hidden');
+          passwordSuccess.classList.add('hidden');
           return;
         }
 
-        // Close modal and logout
-        closeResetPasswordModal();
-        
-        // Show success message and logout
-        alert('Password changed successfully. You will be logged out.');
-        await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
-        window.location.href = '/';
+        // Show success message in modal
+        passwordError.classList.add('hidden');
+        passwordSuccess.textContent = 'Password changed successfully. You will be logged out.';
+        passwordSuccess.classList.remove('hidden');
+        resetPasswordForm.style.display = 'none';
+        successActions.classList.remove('hidden');
         
       } catch (err) {
         console.error('Change password error:', err);
         passwordError.textContent = 'An error occurred. Please try again.';
         passwordError.classList.remove('hidden');
+        passwordSuccess.classList.add('hidden');
+      }
+    });
+
+    // Logout after reset button
+    logoutAfterResetBtn.addEventListener('click', async () => {
+      try {
+        await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+        window.location.href = '/';
+      } catch (err) {
+        console.error('Logout error:', err);
       }
     });
 

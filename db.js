@@ -169,9 +169,9 @@ function initializeDatabase() {
   let fullUserRoleId = fullUserRoleExists?.id;
 
   if (!fullUserRoleExists) {
-    const allPerms = db.prepare('SELECT id FROM permissions').all();
+    const allPerms = db.prepare('SELECT id, name FROM permissions').all();
     fullUserRoleId = db
-      .prepare('INSERT INTO roles (name, description, is_default, is_system) VALUES (?, ?, 1, 1)')
+      .prepare('INSERT INTO roles (name, description, is_default, is_system) VALUES (?, ?, 1, 0)')
       .run('Full User', 'User with access to all tools')
       .lastInsertRowid;
 
@@ -181,6 +181,13 @@ function initializeDatabase() {
         db.prepare('INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)')
           .run(fullUserRoleId, perm.id);
       }
+    }
+  } else {
+    // Fix existing Full User role permissions (remove administration if present)
+    const adminPerm = db.prepare('SELECT id FROM permissions WHERE name = ?').get('administration');
+    if (adminPerm) {
+      db.prepare('DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?')
+        .run(fullUserRoleId, adminPerm.id);
     }
   }
 
