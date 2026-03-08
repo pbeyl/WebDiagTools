@@ -65,7 +65,7 @@ const transporter = nodemailer.createTransport({
 app.get('/', (req, res) => {
   const token = req.cookies?.token;
   if (token) {
-    res.render('dashboard');
+    res.render('dashboard', { activePage: 'dashboard' });
   } else {
     res.render('login');
   }
@@ -807,11 +807,11 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
 
 // Serve additional pages
 app.get('/dashboard', (req, res) => {
-  res.render('dashboard');
+  res.render('dashboard', { activePage: 'dashboard' });
 });
 
 app.get('/admin', (req, res) => {
-  res.render('admin');
+  res.render('admin', { activePage: 'admin' });
 });
 
 app.get('/reset-password', (req, res) => {

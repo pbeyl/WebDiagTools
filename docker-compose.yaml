@@ -1,8 +1,8 @@
 services:
   net-tools-app:
-    build: .
-    ports:
-      - "8080:8080"
+    build: 
+      context: .
+      network: host
     cap_add:
       - NET_RAW
       - NET_ADMIN
@@ -27,8 +27,8 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      - ./static:/srv/static:ro
 
 volumes:
   caddy_data:
   caddy_config:
-

@@ -1,0 +1,59 @@
+html,
+body {
+  height: 100%;
+}
+
+/* Dashboard output scrollbar */
+pre::-webkit-scrollbar {
+  width: 8px;
+}
+
+pre::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+
+pre::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 4px;
+}
+
+pre::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
+
+/* Hide number input arrows */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.form-container {
+  min-height: 400px;
+}
+
+@media (min-width: 800px) {
+  .form-container {
+    max-height: none;
+  }
+}
+
+.output-container {
+  min-height: 600px;
+}
+
+/* Admin tabs */
+.tab-content {
+  display: none;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+.tab-button.active {
+  background-color: #ffffff;
+  color: #9d003a;
+  border-bottom: 2px solid #9d003a;
+}
+

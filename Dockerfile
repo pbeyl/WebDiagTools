@@ -26,7 +26,7 @@ RUN mkdir -p /app/data && chown -R node:node /app/data
 COPY . .
 
 # Expose the port the app runs on
-EXPOSE 8080
+#EXPOSE 8080
 
 # Define the command to run the application
 CMD [ "node", "server.js" ]
