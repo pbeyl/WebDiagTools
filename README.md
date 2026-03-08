@@ -12,6 +12,7 @@ Web-based network diagnostic toolset that exposes common tools (ping, nslookup, 
 - In-app “Reset Password” option (menu) for authenticated users
 - Streaming command output to the browser
 - API endpoint for programmatic use: `/api/net-tool` (requires login)
+- Optional header bearer token auth for API requests
 - Container-friendly (Dockerfile + docker-compose included)
 - SQLite database persisted in a mounted volume (data/ztna-tools.db)
 
@@ -119,11 +120,34 @@ The application exposes a POST endpoint at `/api/net-tool` which accepts JSON pa
 - `protocol` (optional string): `tcp` or `udp` (validated server-side)
 - `debug` (optional boolean): enable more verbose output for certain tools
 
+Authentication options for API calls:
+
+- Session cookie (after `/api/auth/login`)
+- Bearer token in header: `Authorization: Bearer <token>`
+
+Users can self-manage bearer tokens from the app user menu (`My Profile / API Token`) where they can:
+
+- Update their own email address
+- Generate a new bearer token with a selected validity period
+- Extend existing bearer token expiry
+- Rotate (replace) token value
+
+Important: bearer token values are shown only once at generation time and are never displayed again in the UI.
+
 Example curl request (streaming output):
 
 ```bash
 curl -N -X POST http://localhost:8080/api/net-tool \
 	-H "Content-Type: application/json" \
+	-d '{"tool":"ping","host":"8.8.8.8"}'
+```
+
+Example curl request with bearer token:
+
+```bash
+curl -N -X POST http://localhost:8080/api/net-tool \
+	-H "Content-Type: application/json" \
+	-H "Authorization: Bearer YOUR_TOKEN_VALUE" \
 	-d '{"tool":"ping","host":"8.8.8.8"}'
 ```
 

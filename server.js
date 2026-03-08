@@ -29,6 +29,10 @@ const {
   createPasswordResetToken,
   verifyPasswordResetToken,
   usePasswordResetToken,
+  getUserApiTokenMetadata,
+  createOrRotateUserApiToken,
+  extendUserApiTokenExpiry,
+  revokeUserApiToken,
   logAudit,
   verifyPassword
 } = require('./db');
@@ -126,6 +130,7 @@ app.post('/api/auth/logout', authMiddleware, (req, res) => {
 app.get('/api/auth/me', authMiddleware, (req, res) => {
   const user = getUserById(req.user.userId);
   const permissions = getUserPermissions(req.user.userId);
+  const apiToken = getUserApiTokenMetadata(req.user.userId);
 
   res.json({
     user: {
@@ -134,8 +139,128 @@ app.get('/api/auth/me', authMiddleware, (req, res) => {
       email: user.email,
       forcePasswordChange: !!user.force_password_change
     },
-    permissions: permissions.map(p => p.name)
+    permissions: permissions.map(p => p.name),
+    apiToken
   });
+});
+
+// Update authenticated user's own profile
+app.put('/api/auth/profile', authMiddleware, (req, res) => {
+  const { email } = req.body;
+
+  if (email !== undefined && email !== null && email !== '') {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+  }
+
+  try {
+    updateUser(req.user.userId, {
+      email: email === '' ? null : email
+    });
+
+    const updatedUser = getUserById(req.user.userId);
+    logAudit(req.user.userId, 'PROFILE_UPDATED', 'user', { email: updatedUser.email || null }, req.ip);
+
+    res.json({
+      success: true,
+      user: {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        email: updatedUser.email || null
+      }
+    });
+  } catch (err) {
+    console.error('Profile update error:', err);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
+function parseLifetimeSeconds(value) {
+  const parsed = parseInt(value, 10);
+  if (isNaN(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  const minSeconds = 60 * 5;
+  const maxSeconds = 60 * 60 * 24 * 365;
+  if (parsed < minSeconds || parsed > maxSeconds) {
+    return null;
+  }
+
+  return parsed;
+}
+
+// Get authenticated user's bearer token metadata (token value is never returned)
+app.get('/api/auth/api-token', authMiddleware, (req, res) => {
+  const metadata = getUserApiTokenMetadata(req.user.userId);
+  res.json({ apiToken: metadata });
+});
+
+// Generate (or rotate) authenticated user's bearer token
+app.post('/api/auth/api-token/generate', authMiddleware, (req, res) => {
+  const { validitySeconds } = req.body;
+  const lifetimeSeconds = parseLifetimeSeconds(validitySeconds);
+
+  if (!lifetimeSeconds) {
+    return res.status(400).json({ error: 'Invalid token validity period' });
+  }
+
+  try {
+    const result = createOrRotateUserApiToken(req.user.userId, lifetimeSeconds);
+    logAudit(req.user.userId, 'API_TOKEN_GENERATED', 'api_token', { expires_at: result.expiresAt }, req.ip);
+
+    res.json({
+      success: true,
+      token: result.token,
+      tokenLast4: result.tokenLast4,
+      expiresAt: result.expiresAt,
+      warning: 'Successfully generated token. Store it securely now.'
+    });
+  } catch (err) {
+    console.error('API token generation error:', err);
+    res.status(500).json({ error: 'Failed to generate API token' });
+  }
+});
+
+// Extend authenticated user's bearer token expiry
+app.post('/api/auth/api-token/extend', authMiddleware, (req, res) => {
+  const { extensionSeconds } = req.body;
+  const extendSeconds = parseLifetimeSeconds(extensionSeconds);
+
+  if (!extendSeconds) {
+    return res.status(400).json({ error: 'Invalid token extension period' });
+  }
+
+  try {
+    const updated = extendUserApiTokenExpiry(req.user.userId, extendSeconds);
+    if (!updated) {
+      return res.status(404).json({ error: 'No active API token to extend' });
+    }
+
+    logAudit(req.user.userId, 'API_TOKEN_EXTENDED', 'api_token', { expires_at: updated.expiresAt }, req.ip);
+    res.json({ success: true, expiresAt: updated.expiresAt });
+  } catch (err) {
+    console.error('API token extension error:', err);
+    res.status(500).json({ error: 'Failed to extend API token' });
+  }
+});
+
+// Revoke authenticated user's bearer token
+app.post('/api/auth/api-token/revoke', authMiddleware, (req, res) => {
+  try {
+    const result = revokeUserApiToken(req.user.userId);
+    if (!result || result.changes === 0) {
+      return res.status(404).json({ error: 'No active API token to revoke' });
+    }
+
+    logAudit(req.user.userId, 'API_TOKEN_REVOKED', 'api_token', null, req.ip);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('API token revoke error:', err);
+    res.status(500).json({ error: 'Failed to revoke API token' });
+  }
 });
 
 // Change password for authenticated user

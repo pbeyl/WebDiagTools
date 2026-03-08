@@ -2,6 +2,7 @@ let currentEditUserId = null;
 let allRoles = [];
 let allPermissions = [];
 let requirePasswordChange = false; // set by loadCurrentUser if needed
+let currentUserEmail = '';
 
 // Reset Password Modal element references (needed early for DOMContentLoaded)
 const resetPasswordBtn = document.getElementById('reset-password-btn');
@@ -53,6 +54,7 @@ async function loadCurrentUser() {
 
     const data = await response.json();
     document.getElementById('current-user').textContent = data.user.username;
+    currentUserEmail = data.user.email || '';
     // update hidden username display if exists
     const menuName = document.getElementById('current-user');
     if (menuName) menuName.textContent = data.user.username;
@@ -175,6 +177,236 @@ resetPasswordForm.addEventListener('submit', async (e) => {
 });
 
 // (logout-after-reset button removed from UI)
+
+// User Profile / API Token modal functionality
+const userProfileBtn = document.getElementById('user-profile-btn');
+const userProfileModal = document.getElementById('user-profile-modal');
+const closeUserProfileModalBtn = document.getElementById('close-user-profile-modal');
+const userProfileForm = document.getElementById('user-profile-form');
+const profileEmailInput = document.getElementById('profile-email');
+const tokenValiditySelect = document.getElementById('token-validity-select');
+const apiTokenStatus = document.getElementById('api-token-status');
+const apiTokenLast4 = document.getElementById('api-token-last4');
+const apiTokenExpires = document.getElementById('api-token-expires');
+const apiTokenDisplaySection = document.getElementById('api-token-display-section');
+const apiTokenOnce = document.getElementById('api-token-once');
+const generateApiTokenBtn = document.getElementById('generate-api-token-btn');
+const extendApiTokenBtn = document.getElementById('extend-api-token-btn');
+const revokeApiTokenBtn = document.getElementById('revoke-api-token-btn');
+const copyApiTokenBtn = document.getElementById('copy-api-token-btn');
+const userProfileError = document.getElementById('user-profile-error');
+const userProfileSuccess = document.getElementById('user-profile-success');
+
+function clearProfileMessages() {
+  userProfileError.classList.add('hidden');
+  userProfileSuccess.classList.add('hidden');
+}
+
+function showProfileError(message) {
+  userProfileSuccess.classList.add('hidden');
+  userProfileError.textContent = message;
+  userProfileError.classList.remove('hidden');
+}
+
+function showProfileSuccess(message) {
+  userProfileError.classList.add('hidden');
+  userProfileSuccess.textContent = message;
+  userProfileSuccess.classList.remove('hidden');
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function updateTokenMetadataUI(metadata) {
+  if (!metadata || !metadata.hasToken) {
+    apiTokenStatus.textContent = 'No active token';
+    apiTokenLast4.textContent = '-';
+    apiTokenExpires.textContent = '-';
+    extendApiTokenBtn.classList.add('hidden');
+    revokeApiTokenBtn.classList.add('hidden');
+    return;
+  }
+
+  apiTokenStatus.textContent = 'Active';
+  apiTokenLast4.textContent = metadata.tokenLast4 ? `••••${metadata.tokenLast4}` : '-';
+  apiTokenExpires.textContent = formatDateTime(metadata.expiresAt);
+  extendApiTokenBtn.classList.remove('hidden');
+  revokeApiTokenBtn.classList.remove('hidden');
+}
+
+async function loadApiTokenMetadata() {
+  const response = await fetch('/api/auth/api-token', { credentials: 'same-origin' });
+  if (!response.ok) {
+    throw new Error('Failed to load API token metadata');
+  }
+
+  const data = await response.json();
+  updateTokenMetadataUI(data.apiToken);
+}
+
+function hideTokenValueDisplay() {
+  apiTokenDisplaySection.classList.add('hidden');
+  apiTokenOnce.value = '';
+}
+
+async function generateOrRotateToken() {
+  clearProfileMessages();
+  const validitySeconds = parseInt(tokenValiditySelect.value, 10);
+
+  const response = await fetch('/api/auth/api-token/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    credentials: 'same-origin',
+    body: JSON.stringify({ validitySeconds })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to generate token');
+  }
+
+  apiTokenOnce.value = data.token;
+  apiTokenDisplaySection.classList.remove('hidden');
+  updateTokenMetadataUI({
+    hasToken: true,
+    tokenLast4: data.tokenLast4,
+    expiresAt: data.expiresAt
+  });
+  showProfileSuccess(data.warning || 'Token generated. Copy it now; it will not be shown again.');
+}
+
+function closeUserProfileModal() {
+  userProfileModal.classList.add('hidden');
+  clearProfileMessages();
+  hideTokenValueDisplay();
+}
+
+userProfileBtn.addEventListener('click', async () => {
+  userMenu.classList.add('hidden');
+  userProfileModal.classList.remove('hidden');
+  clearProfileMessages();
+  hideTokenValueDisplay();
+  profileEmailInput.value = currentUserEmail || '';
+
+  try {
+    await loadApiTokenMetadata();
+  } catch (err) {
+    showProfileError(err.message);
+  }
+});
+
+closeUserProfileModalBtn.addEventListener('click', closeUserProfileModal);
+
+userProfileModal.addEventListener('click', (e) => {
+  if (e.target === userProfileModal) {
+    closeUserProfileModal();
+  }
+});
+
+userProfileForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  clearProfileMessages();
+
+  try {
+    const response = await fetch('/api/auth/profile', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ email: profileEmailInput.value.trim() })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to update profile');
+    }
+
+    currentUserEmail = data.user.email || '';
+    showProfileSuccess('Email updated successfully.');
+  } catch (err) {
+    showProfileError(err.message);
+  }
+});
+
+generateApiTokenBtn.addEventListener('click', async () => {
+  try {
+    await generateOrRotateToken();
+  } catch (err) {
+    showProfileError(err.message);
+  }
+});
+
+extendApiTokenBtn.addEventListener('click', async () => {
+  clearProfileMessages();
+  const extensionSeconds = parseInt(tokenValiditySelect.value, 10);
+
+  try {
+    const response = await fetch('/api/auth/api-token/extend', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ extensionSeconds })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to extend token');
+    }
+
+    await loadApiTokenMetadata();
+    showProfileSuccess('Token expiry updated successfully.');
+  } catch (err) {
+    showProfileError(err.message);
+  }
+});
+
+revokeApiTokenBtn.addEventListener('click', async () => {
+  clearProfileMessages();
+
+  try {
+    const response = await fetch('/api/auth/api-token/revoke', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'same-origin'
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to revoke token');
+    }
+
+    hideTokenValueDisplay();
+    await loadApiTokenMetadata();
+    showProfileSuccess('API token revoked successfully.');
+  } catch (err) {
+    showProfileError(err.message);
+  }
+});
+
+copyApiTokenBtn.addEventListener('click', async () => {
+  if (!apiTokenOnce.value) {
+    showProfileError('No token available to copy. Generate one first.');
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(apiTokenOnce.value);
+    showProfileSuccess('Token copied to clipboard.');
+  } catch (err) {
+    showProfileError('Failed to copy token to clipboard.');
+  }
+});
 
 // Load users
 async function loadUsers() {

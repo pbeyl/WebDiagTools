@@ -2,6 +2,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const fs = require('fs');
+const crypto = require('crypto');
 
 // Initialize database
 // database stored in data directory for persistence
@@ -18,6 +19,14 @@ if (!fs.existsSync(dbPath)) {
 }
 
 const db = new Database(dbPath);
+
+function toSqliteDate(date) {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function hashApiToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
 
 // Enable foreign keys
 db.pragma('foreign_keys = ON');
@@ -105,6 +114,21 @@ function initializeDatabase() {
       expires_at DATETIME NOT NULL,
       used INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  // API bearer tokens table (one active token per user)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS api_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL UNIQUE,
+      token_hash TEXT UNIQUE NOT NULL,
+      token_last4 TEXT NOT NULL,
+      expires_at DATETIME NOT NULL,
+      revoked INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
@@ -407,7 +431,6 @@ const dbFunctions = {
 
   // Password reset operations
   createPasswordResetToken(userId) {
-    const crypto = require('crypto');
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
@@ -431,6 +454,118 @@ const dbFunctions = {
     return db
       .prepare('UPDATE password_reset_tokens SET used = 1 WHERE token = ?')
       .run(token);
+  },
+
+  getUserApiTokenMetadata(userId) {
+    const token = db
+      .prepare(`
+        SELECT id, user_id, token_last4, expires_at, revoked, created_at, updated_at
+        FROM api_tokens
+        WHERE user_id = ?
+      `)
+      .get(userId);
+
+    if (!token) {
+      return {
+        hasToken: false,
+        tokenLast4: null,
+        expiresAt: null,
+        createdAt: null,
+        updatedAt: null,
+        revoked: false,
+        isExpired: false
+      };
+    }
+
+    const isExpired = new Date(token.expires_at).getTime() <= Date.now();
+    return {
+      hasToken: !token.revoked && !isExpired,
+      tokenLast4: token.token_last4,
+      expiresAt: token.expires_at,
+      createdAt: token.created_at,
+      updatedAt: token.updated_at,
+      revoked: !!token.revoked,
+      isExpired
+    };
+  },
+
+  createOrRotateUserApiToken(userId, validitySeconds) {
+    const ttlSeconds = parseInt(validitySeconds, 10);
+    if (isNaN(ttlSeconds) || ttlSeconds <= 0) {
+      throw new Error('Invalid token validity period');
+    }
+
+    const token = crypto.randomBytes(48).toString('base64url');
+    const tokenHash = hashApiToken(token);
+    const tokenLast4 = token.slice(-4);
+    const expiresAt = toSqliteDate(new Date(Date.now() + ttlSeconds * 1000));
+
+    db.prepare(`
+      INSERT INTO api_tokens (user_id, token_hash, token_last4, expires_at, revoked)
+      VALUES (?, ?, ?, ?, 0)
+      ON CONFLICT(user_id) DO UPDATE SET
+        token_hash = excluded.token_hash,
+        token_last4 = excluded.token_last4,
+        expires_at = excluded.expires_at,
+        revoked = 0,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(userId, tokenHash, tokenLast4, expiresAt);
+
+    return {
+      token,
+      expiresAt,
+      tokenLast4
+    };
+  },
+
+  extendUserApiTokenExpiry(userId, extensionSeconds) {
+    const extSeconds = parseInt(extensionSeconds, 10);
+    if (isNaN(extSeconds) || extSeconds <= 0) {
+      throw new Error('Invalid token extension period');
+    }
+
+    const row = db
+      .prepare('SELECT id, expires_at, revoked FROM api_tokens WHERE user_id = ?')
+      .get(userId);
+
+    if (!row || row.revoked) {
+      return null;
+    }
+
+    const currentExpiry = new Date(row.expires_at).getTime();
+    const baseTime = Math.max(Date.now(), isNaN(currentExpiry) ? Date.now() : currentExpiry);
+    const newExpiry = toSqliteDate(new Date(baseTime + extSeconds * 1000));
+
+    db.prepare('UPDATE api_tokens SET expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?')
+      .run(newExpiry, userId);
+
+    return { expiresAt: newExpiry };
+  },
+
+  revokeUserApiToken(userId) {
+    return db
+      .prepare('UPDATE api_tokens SET revoked = 1, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?')
+      .run(userId);
+  },
+
+  getApiTokenOwner(token) {
+    if (!token || typeof token !== 'string') {
+      return null;
+    }
+
+    const tokenHash = hashApiToken(token);
+
+    return db
+      .prepare(`
+        SELECT u.id, u.username, u.email, u.status, u.role_id
+        FROM api_tokens t
+        JOIN users u ON u.id = t.user_id
+        WHERE t.token_hash = ?
+          AND t.revoked = 0
+          AND t.expires_at > datetime('now')
+        LIMIT 1
+      `)
+      .get(tokenHash);
   },
 
   // Audit logging

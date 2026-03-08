@@ -1,3 +1,102 @@
+    <!-- Reset Password Modal -->
+    <div id="reset-password-modal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50">
+      <div class="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-bold text-gray-900">Reset Password</h2>
+        </div>
+        <form id="reset-password-form" class="space-y-4">
+          <div>
+            <label for="new-password" class="block text-sm font-semibold text-gray-700 mb-1">New Password</label>
+            <input type="password" id="new-password" required class="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded p-2 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
+          </div>
+          <div>
+            <label for="confirm-password" class="block text-sm font-semibold text-gray-700 mb-1">Confirm Password</label>
+            <input type="password" id="confirm-password" required class="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded p-2 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
+          </div>
+          <div class="flex gap-2 pt-2">
+            <button type="button" id="cancel-reset" class="flex-1 px-4 py-2 text-gray-700 bg-gray-200 hover:bg-gray-300 rounded font-semibold transition">
+              Cancel
+            </button>
+            <button type="submit" class="flex-1 px-4 py-2 text-white bg-[#9D003A] hover:bg-[#72002E] rounded font-semibold transition">
+              Reset Password
+            </button>
+          </div>
+        </form>
+        <div id="password-error" class="hidden text-red-600 text-sm"></div>
+        <div id="password-success" class="hidden text-green-600 text-sm"></div>
+        <!-- success-actions removed: no explicit logout button shown after password change -->
+      </div>
+    </div>
+
+    <!-- User Profile / API Token Modal -->
+    <div id="user-profile-modal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-lg shadow-lg p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-bold text-gray-900">My Profile</h2>
+          <button id="close-user-profile-modal" type="button" class="text-gray-500 hover:text-gray-700 text-xl leading-none">&times;</button>
+        </div>
+
+        <form id="user-profile-form" class="space-y-4 mb-6">
+          <div>
+            <label for="profile-email" class="block text-sm font-semibold text-gray-700 mb-1">Email Address</label>
+            <input type="email" id="profile-email" class="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded p-2 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none" placeholder="you@example.com">
+          </div>
+          <div class="flex gap-2">
+            <button id="save-profile-btn" type="submit" class="px-4 py-2 text-white bg-[#9D003A] hover:bg-[#72002E] rounded font-semibold transition">
+              Save Email
+            </button>
+          </div>
+        </form>
+
+        <div class="border-t border-gray-200 pt-4 space-y-4">
+          <h3 class="text-lg font-bold text-gray-900">Bearer API Token</h3>
+
+          <div>
+            <label for="token-validity-select" class="block text-sm font-semibold text-gray-700 mb-1">Token expiry period (used for generate/new/extend)</label>
+            <select id="token-validity-select" class="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded p-2 focus:ring-2 focus:ring-[#9D003A] focus:border-[#9D003A] focus:outline-none">
+              <option value="86400">1 day</option>
+              <option value="604800">7 days</option>
+              <option value="2592000" selected>30 days</option>
+              <option value="7776000">90 days</option>
+              <option value="15552000">180 days</option>
+              <option value="31536000">365 days</option>
+            </select>
+          </div>
+
+          <div class="text-sm text-gray-700 space-y-1">
+            <p><span class="font-semibold">Status:</span> <span id="api-token-status">No active token</span></p>
+            <p><span class="font-semibold">Token suffix:</span> <span id="api-token-last4">-</span></p>
+            <p><span class="font-semibold">Expires:</span> <span id="api-token-expires">-</span></p>
+          </div>
+
+          <div id="api-token-warning" class="bg-amber-50 border border-amber-300 text-amber-800 text-sm rounded p-3">
+            Token values are shown only once when generated. Store them securely. The full token is never displayed again.
+          </div>
+
+          <div id="api-token-display-section" class="hidden bg-gray-50 border border-gray-200 rounded p-3">
+            <div class="flex items-center justify-between mb-1">
+              <label for="api-token-once" class="block text-sm font-semibold text-gray-700">New token</label>
+              <button id="copy-api-token-btn" type="button" class="p-1 text-gray-600 hover:text-[#9D003A]" title="Copy token" aria-label="Copy token">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                </svg>
+              </button>
+            </div>
+            <textarea id="api-token-once" readonly rows="1" class="w-full bg-white border border-gray-300 text-gray-900 text-xs rounded p-2 pr-2 focus:outline-none"></textarea>
+          </div>
+
+          <div class="flex flex-wrap gap-2 pt-1">
+            <button id="generate-api-token-btn" type="button" class="px-4 py-2 text-white bg-[#9D003A] hover:bg-[#72002E] rounded font-semibold transition">Generate Token</button>
+            <button id="extend-api-token-btn" type="button" class="px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded font-semibold transition hidden">Extend Expiry</button>
+            <button id="revoke-api-token-btn" type="button" class="px-4 py-2 text-white bg-red-600 hover:bg-red-700 rounded font-semibold transition hidden">Revoke Token</button>
+          </div>
+        </div>
+
+        <div id="user-profile-error" class="hidden mt-4 text-red-600 text-sm"></div>
+        <div id="user-profile-success" class="hidden mt-4 text-green-600 text-sm"></div>
+      </div>
+    </div>
+
 <header class="bg-white shadow border-b border-gray-200">
   <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
     <h1 class="text-2xl font-bold text-[#9D003A]">NetDiag Toolbox</h1>
@@ -25,7 +124,7 @@
           <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
         </svg>
       </button>
-      <div id="user-menu" class="hidden absolute right-0 top-full mt-2 w-40 bg-white shadow-lg rounded z-50">
+      <div id="user-menu" class="hidden absolute right-0 top-full mt-2 w-56 bg-white shadow-lg rounded z-50">
         <!-- Mobile-only nav links (visible inside dropdown on small screens) -->
         <a href="/dashboard" id="dashboard-link" class="sm:hidden flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-[#9D003A] hover:text-white <%= (typeof activePage !== 'undefined' && activePage === 'dashboard') ? 'bg-[#9D003A] text-white' : '' %>">
           <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 2.5L2 8.5V17a1 1 0 001 1h4v-5a1 1 0 011-1h2a1 1 0 011 1v5h4a1 1 0 001-1V8.5L10 2.5z"/></svg>
@@ -37,6 +136,12 @@
           </svg>
           Settings
         </a>
+        <button id="user-profile-btn" class="w-full text-left flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-[#9D003A] hover:text-white">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.121 17.804A9 9 0 1118 9m-6 3a3 3 0 100-6 3 3 0 000 6zm-7 8a7 7 0 0114 0"/>
+          </svg>
+          My Profile
+        </button>
         <button id="reset-password-btn" class="w-full text-left flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-[#9D003A] hover:text-white">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>

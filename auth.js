@@ -1,9 +1,41 @@
 const jwt = require('jsonwebtoken');
+const { getApiTokenOwner, getUserPermissions } = require('./db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
+function extractBearerToken(authHeader) {
+  if (!authHeader || typeof authHeader !== 'string') {
+    return null;
+  }
+
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  return match[1].trim();
+}
+
 // Middleware to verify JWT token
 function authMiddleware(req, res, next) {
+  const bearerToken = extractBearerToken(req.headers.authorization);
+
+  if (bearerToken) {
+    const user = getApiTokenOwner(bearerToken);
+    if (!user || user.status !== 'active') {
+      return res.status(401).json({ error: 'Unauthorized: Invalid or expired bearer token' });
+    }
+
+    const permissions = getUserPermissions(user.id).map((permission) => permission.name);
+    req.user = {
+      userId: user.id,
+      username: user.username,
+      permissions,
+      authType: 'bearer'
+    };
+    return next();
+  }
+
   const token = req.cookies?.token;
 
   if (!token) {

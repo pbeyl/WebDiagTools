@@ -71,7 +71,8 @@ This repository is a small web app that exposes common network diagnostic tools 
   - `static/js/dashboard.js` — permission mapping, tool UI, and streaming client code.
   - `static/js/*` - javascript files for UI logic and API calls (dashboard, admin, auth)
   - `views/*` — templates for UI elements and modals (reset-password, admin)
-
+  - `views/partials/header.ejs` - contains common header elements and modal dialogs 
+  
 - Safety and testing guidance for PRs:
   - Do not expose new endpoints that allow arbitrary command execution.
   - When changing streaming behavior, test with `curl -N` and the browser UI to ensure no regressions in progressive output.
