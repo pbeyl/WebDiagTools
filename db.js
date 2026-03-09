@@ -19,6 +19,7 @@ if (!fs.existsSync(dbPath)) {
 }
 
 const db = new Database(dbPath);
+let lastAuthAuditCleanupAt = 0;
 
 function toSqliteDate(date) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
@@ -138,19 +139,30 @@ function initializeDatabase() {
     )
   `);
 
-  // Audit logs table
+  // Comprehensive audit logs table for all authentication and admin actions
   db.exec(`
-    CREATE TABLE IF NOT EXISTS audit_logs (
+    CREATE TABLE IF NOT EXISTS auth_audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      success INTEGER NOT NULL,
+      auth_type TEXT NOT NULL,
       user_id INTEGER,
-      action TEXT NOT NULL,
-      resource TEXT,
+      username TEXT,
+      role_name TEXT,
+      source_ip TEXT,
+      request_method TEXT,
+      request_path TEXT,
+      http_headers TEXT,
+      failure_reason TEXT,
       details TEXT,
-      ip_address TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      response_data TEXT,
+      occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
     )
   `);
+
+  db.exec('CREATE INDEX IF NOT EXISTS idx_auth_audit_logs_occurred_at ON auth_audit_logs (occurred_at DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_auth_audit_logs_auth_type ON auth_audit_logs (auth_type)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_auth_audit_logs_username ON auth_audit_logs (username)');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS app_settings (
@@ -253,6 +265,141 @@ function initializeDatabase() {
 
 // Functions to interact with database
 const dbFunctions = {
+  cleanupAuthAuditLogs(retentionDays = 90) {
+    const parsedRetention = parseInt(retentionDays, 10);
+    const boundedRetention = Number.isNaN(parsedRetention)
+      ? 90
+      : Math.min(Math.max(parsedRetention, 30), 180);
+
+    return db
+      .prepare("DELETE FROM auth_audit_logs WHERE occurred_at < datetime('now', ?)")
+      .run(`-${boundedRetention} days`);
+  },
+
+  logAuthAudit({
+    success,
+    authType,
+    userId = null,
+    username = null,
+    roleName = null,
+    sourceIp = null,
+    requestMethod = null,
+    requestPath = null,
+    httpHeaders = null,
+    failureReason = null,
+    details = null,
+    responseData = null
+  }) {
+    const now = Date.now();
+    const cleanupIntervalMs = 60 * 60 * 1000;
+
+    if (!lastAuthAuditCleanupAt || now - lastAuthAuditCleanupAt >= cleanupIntervalMs) {
+      dbFunctions.cleanupAuthAuditLogs(90);
+      lastAuthAuditCleanupAt = now;
+    }
+
+    return db
+      .prepare(`
+        INSERT INTO auth_audit_logs (
+          success,
+          auth_type,
+          user_id,
+          username,
+          role_name,
+          source_ip,
+          request_method,
+          request_path,
+          http_headers,
+          failure_reason,
+          details,
+          response_data
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        success ? 1 : 0,
+        authType,
+        userId,
+        username,
+        roleName,
+        sourceIp,
+        requestMethod,
+        requestPath,
+        httpHeaders ? JSON.stringify(httpHeaders) : null,
+        failureReason,
+        details ? JSON.stringify(details) : null,
+        responseData ? JSON.stringify(responseData) : null
+      );
+  },
+
+  getAuthAuditLogs({ search = '', limit = 100, offset = 0 } = {}) {
+    const parsedLimit = parseInt(limit, 10);
+    const parsedOffset = parseInt(offset, 10);
+    const safeLimit = Number.isNaN(parsedLimit) ? 100 : Math.min(Math.max(parsedLimit, 1), 500);
+    const safeOffset = Number.isNaN(parsedOffset) ? 0 : Math.max(parsedOffset, 0);
+
+    const whereParts = [];
+    const whereParams = [];
+
+    if (search && typeof search === 'string' && search.trim()) {
+      const searchValue = `%${search.trim()}%`;
+      whereParts.push(`(
+        auth_type LIKE ? OR
+        username LIKE ? OR
+        role_name LIKE ? OR
+        source_ip LIKE ? OR
+        request_method LIKE ? OR
+        request_path LIKE ? OR
+        failure_reason LIKE ? OR
+        http_headers LIKE ? OR
+        details LIKE ? OR
+        response_data LIKE ?
+      )`);
+      for (let index = 0; index < 10; index += 1) {
+        whereParams.push(searchValue);
+      }
+    }
+
+    const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+    const rows = db
+      .prepare(`
+        SELECT
+          id,
+          success,
+          auth_type,
+          user_id,
+          username,
+          role_name,
+          source_ip,
+          request_method,
+          request_path,
+          http_headers,
+          failure_reason,
+          details,
+          response_data,
+          occurred_at
+        FROM auth_audit_logs
+        ${whereClause}
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT ? OFFSET ?
+      `)
+      .all(...whereParams, safeLimit, safeOffset);
+
+    const totalRow = db
+      .prepare(`
+        SELECT COUNT(*) AS total
+        FROM auth_audit_logs
+        ${whereClause}
+      `)
+      .get(...whereParams);
+
+    return {
+      rows,
+      total: totalRow ? totalRow.total : 0
+    };
+  },
+
   getSetting(key) {
     return getSettingValue(key);
   },
@@ -615,36 +762,16 @@ const dbFunctions = {
 
     return db
       .prepare(`
-        SELECT u.id, u.username, u.email, u.status, u.role_id
+        SELECT u.id, u.username, u.email, u.status, u.role_id, r.name AS role_name
         FROM api_tokens t
         JOIN users u ON u.id = t.user_id
+        LEFT JOIN roles r ON r.id = u.role_id
         WHERE t.token_hash = ?
           AND t.revoked = 0
           AND t.expires_at > datetime('now')
         LIMIT 1
       `)
       .get(tokenHash);
-  },
-
-  // Audit logging
-  logAudit(userId, action, resource = null, details = null, ipAddress = null) {
-    return db
-      .prepare(`
-        INSERT INTO audit_logs (user_id, action, resource, details, ip_address)
-        VALUES (?, ?, ?, ?, ?)
-      `)
-      .run(userId, action, resource, details ? JSON.stringify(details) : null, ipAddress);
-  },
-
-  getAuditLogs(limit = 100, offset = 0) {
-    return db
-      .prepare(`
-        SELECT id, user_id, action, resource, details, ip_address, timestamp
-        FROM audit_logs
-        ORDER BY timestamp DESC
-        LIMIT ? OFFSET ?
-      `)
-      .all(limit, offset);
   },
 
   verifyPassword(passwordHash, password) {

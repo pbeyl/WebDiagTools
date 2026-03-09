@@ -1,6 +1,12 @@
 const jwt = require('jsonwebtoken');
 const net = require('net');
-const { getApiTokenOwner, getUserPermissions, getHeaderAuthConfig, getUserByUsername } = require('./db');
+const {
+  getApiTokenOwner,
+  getUserPermissions,
+  getHeaderAuthConfig,
+  getUserByUsername,
+  logAuthAudit
+} = require('./db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
@@ -208,6 +214,88 @@ function getHeaderValue(req, headerName) {
   return text.trim();
 }
 
+function getSourceIp(req) {
+  const headerIp = parseRemoteIpHeader(req);
+  if (headerIp) {
+    return headerIp;
+  }
+
+  const directIp = normalizeIp(req.ip);
+  if (directIp) {
+    return directIp;
+  }
+
+  return typeof req.ip === 'string' && req.ip.trim() ? req.ip.trim() : null;
+}
+
+function getCommonHeaderInfo(req) {
+  return {
+    userAgent: getHeaderValue(req, 'user-agent'),
+    xForwardedFor: getHeaderValue(req, 'x-forwarded-for'),
+    remoteIp: getHeaderValue(req, 'remote_ip') || getHeaderValue(req, 'remote-ip') || getHeaderValue(req, 'x-remote-ip')
+  };
+}
+
+// Map internal authType to display names
+function getAuthTypeDisplayName(internalAuthType) {
+  switch (internalAuthType) {
+    case 'password':
+      return 'password';
+    case 'bearer':
+      return 'bearer';
+    case 'header':
+      return 'header';
+    default:
+      return 'unauthenticated';
+  }
+}
+
+// Helper function to log audit events with common fields auto-populated
+function logAuditEvent(req, {
+  success,
+  event,
+  internalAuthType,
+  user = null,
+  failureReason = null,
+  additionalDetails = {},
+  responseStatus,
+  responseBody
+}) {
+  try {
+    const sourceIp = getSourceIp(req);
+    const requestPath = req.originalUrl || req.url;
+    const headerInfo = getCommonHeaderInfo(req);
+    
+    // Add authorization scheme if present
+    const authHeader = req.headers.authorization;
+    const httpHeaders = {
+      ...headerInfo,
+      authorizationScheme: authHeader ? (authHeader.startsWith('Bearer ') ? 'Bearer' : null) : null
+    };
+    
+    logAuthAudit({
+      success,
+      authType: getAuthTypeDisplayName(internalAuthType),
+      userId: user?.id || user?.userId || null,
+      username: user?.username || null,
+      roleName: user?.role_name || null,
+      sourceIp,
+      requestMethod: req.method,
+      requestPath,
+      httpHeaders,
+      failureReason,
+      details: {
+        event,
+        outcome: success ? 'succeeded' : 'failed',
+        ...additionalDetails
+      },
+      responseData: { status: responseStatus, body: responseBody }
+    });
+  } catch (err) {
+    console.error('Failed to write auth audit event:', err);
+  }
+}
+
 function tryHeaderAuth(req) {
   const headerAuthConfig = getHeaderAuthConfig();
   if (!headerAuthConfig.enabled) {
@@ -221,6 +309,18 @@ function tryHeaderAuth(req) {
 
   const remoteIp = parseRemoteIpHeader(req);
   if (!remoteIp || !isRemoteIpAllowed(remoteIp, headerAuthConfig.allowedRemoteIps)) {
+    const responsePayload = { error: 'Unauthorized: remote_ip not allowed for header authentication' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'header_auth_login',
+      internalAuthType: 'header',
+      user: { username: usernameHeaderValue },
+      failureReason: 'remote_ip_not_allowed',
+      additionalDetails: { allowedRemoteIpsConfigured: true },
+      responseStatus: 401,
+      responseBody: responsePayload
+    });
+
     return {
       attempted: true,
       user: null,
@@ -230,6 +330,17 @@ function tryHeaderAuth(req) {
 
   const user = getUserByUsername(usernameHeaderValue);
   if (!user || user.status !== 'active') {
+    const responsePayload = { error: 'Unauthorized: Invalid user in authentication header' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'header_auth_login',
+      internalAuthType: 'header',
+      user: { username: usernameHeaderValue },
+      failureReason: 'invalid_or_inactive_header_user',
+      responseStatus: 401,
+      responseBody: responsePayload
+    });
+
     return {
       attempted: true,
       user: null,
@@ -238,6 +349,7 @@ function tryHeaderAuth(req) {
   }
 
   const permissions = getUserPermissions(user.id).map((permission) => permission.name);
+
   return {
     attempted: true,
     user: {
@@ -267,6 +379,16 @@ function authMiddleware(req, res, next) {
   if (bearerToken) {
     const user = getApiTokenOwner(bearerToken);
     if (!user || user.status !== 'active') {
+      const responsePayload = { error: 'Unauthorized: Invalid or expired bearer token' };
+      logAuditEvent(req, {
+        success: false,
+        event: 'bearer_token_login',
+        internalAuthType: 'bearer',
+        failureReason: 'invalid_or_expired_bearer_token',
+        responseStatus: 401,
+        responseBody: responsePayload
+      });
+
       return res.status(401).json({ error: 'Unauthorized: Invalid or expired bearer token' });
     }
 
@@ -277,20 +399,44 @@ function authMiddleware(req, res, next) {
       permissions,
       authType: 'bearer'
     };
+
     return next();
   }
 
   const token = req.cookies?.token;
 
   if (!token) {
+    const responsePayload = { error: 'Unauthorized: No token provided' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'cookie_token_auth',
+      internalAuthType: 'password',
+      failureReason: 'missing_token',
+      responseStatus: 401,
+      responseBody: responsePayload
+    });
+
     return res.status(401).json({ error: 'Unauthorized: No token provided' });
   }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
+    req.user = {
+      ...decoded,
+      authType: 'password'
+    };
     next();
   } catch (err) {
+    const responsePayload = { error: 'Unauthorized: Invalid token' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'cookie_token_auth',
+      internalAuthType: 'password',
+      failureReason: 'invalid_cookie_token',
+      responseStatus: 401,
+      responseBody: responsePayload
+    });
+
     return res.status(401).json({ error: 'Unauthorized: Invalid token' });
   }
 }

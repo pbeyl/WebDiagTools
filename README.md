@@ -13,6 +13,7 @@ Web-based network diagnostic toolset that exposes common tools (ping, nslookup, 
 - Streaming command output to the browser
 - API endpoint for programmatic use: `/api/net-tool` (requires login)
 - Optional header bearer token auth for API requests
+- Admin authentication audit log (read-only), searchable, CSV export
 - Container-friendly (Dockerfile + docker-compose included)
 - SQLite database persisted in a mounted volume (data/ztna-tools.db)
 
@@ -200,6 +201,18 @@ curl -N -X POST http://localhost:8080/api/net-tool \
 ```
 
 The server streams subprocess `stdout` and `stderr` directly back in the response.
+
+## Authentication Audit Log
+
+Admins can access **Settings → Auth Audit Log** to review authentication activity.
+
+- Captures authentication successes and failures for `password`, `token`, and `header` auth types
+- Stores timestamp, auth type, username, role, source IP, request method/path, failure reason, and relevant request header metadata
+- Supports front-end filtering via the search field
+- Supports CSV export from the page using the export button
+- Retains records for up to 90 days (3 months) via automatic cleanup
+
+Storage design: authentication audit entries are persisted in SQLite (`auth_audit_logs` table) with indexes on timestamp, auth type, and username for efficient filtering.
 
 ## Security Notes
 

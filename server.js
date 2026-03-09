@@ -36,7 +36,8 @@ const {
   revokeUserApiToken,
   getHeaderAuthConfig,
   updateHeaderAuthConfig,
-  logAudit,
+  getAuthAuditLogs,
+  logAuthAudit,
   verifyPassword
 } = require('./db');
 
@@ -51,6 +52,7 @@ const cookieSecure = appUrl.startsWith('https://') || (!appUrl && isProduction);
 // View engine setup
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+app.set('trust proxy', true);
 
 // Middleware
 app.use(express.json());
@@ -78,6 +80,21 @@ app.get('/', (req, res) => {
 
   const headerAuthResult = tryHeaderAuth(req);
   if (headerAuthResult.user) {
+    // Log successful header-based session establishment
+    const user = getUserById(headerAuthResult.user.userId);
+    const responsePayload = { success: true, message: 'Session established via header authentication' };
+    
+    // Temporarily set req.user to allow getAuthTypeForAudit to work correctly
+    req.user = headerAuthResult.user;
+    
+    logAuditEvent(req, {
+      success: true,
+      event: 'header_auth_session_established',
+      user: user,
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+    
     res.render('dashboard', { activePage: 'dashboard' });
     return;
   }
@@ -92,25 +109,73 @@ app.get('/', (req, res) => {
 // Login endpoint
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
+  const normalizedUsername = typeof username === 'string' ? username.trim() : null;
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
 
   if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password required' });
+    const responsePayload = { error: 'Username and password required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_login',
+      user: { username: normalizedUsername },
+      failureReason: 'missing_credentials',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+
+    return res.status(400).json(responsePayload);
   }
 
   const user = getUserByUsername(username);
 
   if (!user || !verifyPassword(user.password_hash, password)) {
-    return res.status(401).json({ error: 'Invalid username or password' });
+    const responsePayload = { error: 'Invalid username or password' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_login',
+      user: { username: normalizedUsername },
+      failureReason: 'invalid_credentials',
+      responseStatus: 401,
+      responseBody: responsePayload
+    });
+
+    return res.status(401).json(responsePayload);
   }
 
   if (user.status !== 'active') {
-    return res.status(401).json({ error: 'User account is inactive' });
+    const responsePayload = { error: 'User account is inactive' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_login',
+      user: user,
+      failureReason: 'inactive_user',
+      responseStatus: 401,
+      responseBody: responsePayload
+    });
+
+    return res.status(401).json(responsePayload);
   }
 
   const permissions = getUserPermissions(user.id);
   const token = generateToken(user, permissions);
 
-  logAudit(user.id, 'LOGIN', null, null, req.ip);
+  const responsePayload = {
+    success: true,
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email
+    }
+  };
+
+  logAuditEvent(req, {
+    success: true,
+    event: 'password_login',
+    user: user,
+    responseStatus: 200,
+    responseBody: responsePayload
+  });
 
   res.cookie('token', token, {
     httpOnly: true,
@@ -119,21 +184,22 @@ app.post('/api/auth/login', (req, res) => {
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   });
 
-  res.json({
-    success: true,
-    user: {
-      id: user.id,
-      username: user.username,
-      email: user.email
-    }
-  });
+  res.json(responsePayload);
 });
 
 // Logout endpoint
 app.post('/api/auth/logout', authMiddleware, (req, res) => {
-  logAudit(req.user.userId, 'LOGOUT', null, null, req.ip);
+  const responsePayload = { success: true };
+
+  logAuditEvent(req, {
+    success: true,
+    event: 'logout',
+    responseStatus: 200,
+    responseBody: responsePayload
+  });
+
   res.clearCookie('token');
-  res.json({ success: true });
+  res.json(responsePayload);
 });
 
 // Get current user info
@@ -161,6 +227,14 @@ app.put('/api/auth/profile', authMiddleware, (req, res) => {
   if (email !== undefined && email !== null && email !== '') {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
+      const responsePayload = { error: 'Invalid email format' };
+      logAuditEvent(req, {
+        success: false,
+        event: 'profile_update',
+        failureReason: 'invalid_email_format',
+        responseStatus: 400,
+        responseBody: responsePayload
+      });
       return res.status(400).json({ error: 'Invalid email format' });
     }
   }
@@ -171,18 +245,36 @@ app.put('/api/auth/profile', authMiddleware, (req, res) => {
     });
 
     const updatedUser = getUserById(req.user.userId);
-    logAudit(req.user.userId, 'PROFILE_UPDATED', 'user', { email: updatedUser.email || null }, req.ip);
 
-    res.json({
+    const responsePayload = {
       success: true,
       user: {
         id: updatedUser.id,
         username: updatedUser.username,
         email: updatedUser.email || null
       }
+    };
+
+    logAuditEvent(req, {
+      success: true,
+      event: 'profile_update',
+      user: updatedUser,
+      additionalDetails: { email: updatedUser.email || null },
+      responseStatus: 200,
+      responseBody: responsePayload
     });
+
+    res.json(responsePayload);
   } catch (err) {
     console.error('Profile update error:', err);
+    const responsePayload = { error: 'Failed to update profile' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'profile_update',
+      failureReason: 'profile_update_failed',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
     res.status(500).json({ error: 'Failed to update profile' });
   }
 });
@@ -249,34 +341,171 @@ function isValidIpOrCidr(value) {
   return false;
 }
 
+function getAuthRequestHeaders(req) {
+  const authorizationHeader = req.headers.authorization;
+  let authorizationScheme = null;
+
+  if (authorizationHeader && typeof authorizationHeader === 'string') {
+    const [scheme] = authorizationHeader.split(/\s+/, 1);
+    authorizationScheme = scheme || null;
+  }
+
+  return {
+    userAgent: req.get('user-agent') || null,
+    xForwardedFor: req.get('x-forwarded-for') || null,
+    authorizationScheme
+  };
+}
+
+// Helper to get the proper authType display name for audit logs
+function getAuthTypeForAudit(req) {
+  const authType = req.user?.authType;
+  switch (authType) {
+    case 'password':
+      return 'password';
+    case 'bearer':
+      return 'bearer';
+    case 'header':
+      return 'header';
+    default:
+      return 'unauthenticated'; // default for unauthenticated/public endpoints
+  }
+}
+
+// Helper function to log audit events with common fields auto-populated
+function logAuditEvent(req, {
+  success,
+  event,
+  user = null,
+  failureReason = null,
+  additionalDetails = {},
+  responseStatus,
+  responseBody
+}) {
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
+  const authenticatedUserId = req.user?.userId || null;
+
+  let auditUser = user;
+  if (!auditUser && authenticatedUserId) {
+    auditUser = getUserById(authenticatedUserId);
+  }
+  
+  // Get user info from either req.user (authenticated) or passed user object
+  const userId = auditUser?.id || auditUser?.userId || authenticatedUserId || null;
+  const username = auditUser?.username || req.user?.username || null;
+  const roleName = auditUser?.role_name || req.user?.roleName || null;
+  
+  logAuthAudit({
+    success,
+    authType: getAuthTypeForAudit(req),
+    userId,
+    username,
+    roleName,
+    sourceIp: req.ip,
+    requestMethod: req.method,
+    requestPath,
+    httpHeaders: requestHeaders,
+    failureReason,
+    details: {
+      event,
+      outcome: success ? 'succeeded' : 'failed',
+      ...additionalDetails
+    },
+    responseData: { status: responseStatus, body: responseBody }
+  });
+}
+
+function csvEscape(value) {
+  if (value === null || value === undefined) {
+    return '""';
+  }
+
+  const text = String(value).replace(/"/g, '""');
+  return `"${text}"`;
+}
+
 // Get authenticated user's bearer token metadata (token value is never returned)
 app.get('/api/auth/api-token', authMiddleware, (req, res) => {
-  const metadata = getUserApiTokenMetadata(req.user.userId);
-  res.json({ apiToken: metadata });
+  try {
+    const metadata = getUserApiTokenMetadata(req.user.userId);
+    const actorUser = getUserById(req.user.userId);
+    const responsePayload = { apiToken: metadata };
+
+    logAuditEvent(req, {
+      success: true,
+      event: 'api_token_metadata_read',
+      user: actorUser,
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+
+    res.json(responsePayload);
+  } catch (err) {
+    console.error('API token metadata fetch error:', err);
+    const responsePayload = { error: 'Failed to load API token metadata' };
+
+    logAuditEvent(req, {
+      success: false,
+      event: 'api_token_metadata_read',
+      failureReason: 'api_token_metadata_read_failed',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+
+    res.status(500).json(responsePayload);
+  }
 });
 
 // Generate (or rotate) authenticated user's bearer token
 app.post('/api/auth/api-token/generate', authMiddleware, (req, res) => {
   const { validitySeconds } = req.body;
   const lifetimeSeconds = parseLifetimeSeconds(validitySeconds);
+  const actorUser = getUserById(req.user.userId);
 
   if (!lifetimeSeconds) {
+    const responsePayload = { error: 'Invalid token validity period' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'api_token_generate',
+      failureReason: 'invalid_token_validity_period',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
     return res.status(400).json({ error: 'Invalid token validity period' });
   }
 
   try {
     const result = createOrRotateUserApiToken(req.user.userId, lifetimeSeconds);
-    logAudit(req.user.userId, 'API_TOKEN_GENERATED', 'api_token', { expires_at: result.expiresAt }, req.ip);
 
-    res.json({
+    const responsePayload = {
       success: true,
       token: result.token,
       tokenLast4: result.tokenLast4,
       expiresAt: result.expiresAt,
       warning: 'Successfully generated token. Store it securely now.'
+    };
+
+    logAuditEvent(req, {
+      success: true,
+      event: 'api_token_generate',
+      user: actorUser,
+      additionalDetails: { expiresAt: result.expiresAt },
+      responseStatus: 200,
+      responseBody: { success: true, tokenLast4: result.tokenLast4, expiresAt: result.expiresAt }
     });
+
+    res.json(responsePayload);
   } catch (err) {
     console.error('API token generation error:', err);
+    const responsePayload = { error: 'Failed to generate API token' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'api_token_generate',
+      failureReason: 'api_token_generate_failed',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
     res.status(500).json({ error: 'Failed to generate API token' });
   }
 });
@@ -285,37 +514,99 @@ app.post('/api/auth/api-token/generate', authMiddleware, (req, res) => {
 app.post('/api/auth/api-token/extend', authMiddleware, (req, res) => {
   const { extensionSeconds } = req.body;
   const extendSeconds = parseLifetimeSeconds(extensionSeconds);
+  const actorUser = getUserById(req.user.userId);
 
   if (!extendSeconds) {
+    const responsePayload = { error: 'Invalid token extension period' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'api_token_extend',
+      failureReason: 'invalid_token_extension_period',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
     return res.status(400).json({ error: 'Invalid token extension period' });
   }
 
   try {
     const updated = extendUserApiTokenExpiry(req.user.userId, extendSeconds);
     if (!updated) {
+      const responsePayload = { error: 'No active API token to extend' };
+      logAuditEvent(req, {
+        success: false,
+        event: 'api_token_extend',
+        failureReason: 'no_active_api_token_to_extend',
+        responseStatus: 404,
+        responseBody: responsePayload
+      });
       return res.status(404).json({ error: 'No active API token to extend' });
     }
 
-    logAudit(req.user.userId, 'API_TOKEN_EXTENDED', 'api_token', { expires_at: updated.expiresAt }, req.ip);
-    res.json({ success: true, expiresAt: updated.expiresAt });
+    const responsePayload = { success: true, expiresAt: updated.expiresAt };
+
+    logAuditEvent(req, {
+      success: true,
+      event: 'api_token_extend',
+      user: actorUser,
+      additionalDetails: { expiresAt: updated.expiresAt },
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+
+    res.json(responsePayload);
   } catch (err) {
     console.error('API token extension error:', err);
+    const responsePayload = { error: 'Failed to extend API token' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'api_token_extend',
+      failureReason: 'api_token_extend_failed',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
     res.status(500).json({ error: 'Failed to extend API token' });
   }
 });
 
 // Revoke authenticated user's bearer token
 app.post('/api/auth/api-token/revoke', authMiddleware, (req, res) => {
+  const actorUser = getUserById(req.user.userId);
+
   try {
     const result = revokeUserApiToken(req.user.userId);
     if (!result || result.changes === 0) {
+      const responsePayload = { error: 'No active API token to revoke' };
+      logAuditEvent(req, {
+        success: false,
+        event: 'api_token_revoke',
+        failureReason: 'no_active_api_token_to_revoke',
+        responseStatus: 404,
+        responseBody: responsePayload
+      });
       return res.status(404).json({ error: 'No active API token to revoke' });
     }
 
-    logAudit(req.user.userId, 'API_TOKEN_REVOKED', 'api_token', null, req.ip);
-    res.json({ success: true });
+    const responsePayload = { success: true };
+
+    logAuditEvent(req, {
+      success: true,
+      event: 'api_token_revoke',
+      user: actorUser,
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+
+    res.json(responsePayload);
   } catch (err) {
     console.error('API token revoke error:', err);
+    const responsePayload = { error: 'Failed to revoke API token' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'api_token_revoke',
+      failureReason: 'api_token_revoke_failed',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
     res.status(500).json({ error: 'Failed to revoke API token' });
   }
 });
@@ -325,29 +616,79 @@ app.post('/api/auth/change-password', authMiddleware, (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword) {
-    return res.status(400).json({ error: 'Current password required' });
+    const responsePayload = { error: 'Current password required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_change',
+      failureReason: 'missing_current_password',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   if (!newPassword) {
-    return res.status(400).json({ error: 'New password required' });
+    const responsePayload = { error: 'New password required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_change',
+      failureReason: 'missing_new_password',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   if (newPassword.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const responsePayload = { error: 'Password must be at least 6 characters' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_change',
+      failureReason: 'new_password_too_short',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   try {
     const authUser = getUserByUsername(req.user.username);
     if (!authUser || !verifyPassword(authUser.password_hash, currentPassword)) {
-      return res.status(401).json({ error: 'Current password is incorrect' });
+      const responsePayload = { error: 'Current password is incorrect' };
+      logAuditEvent(req, {
+        success: false,
+        event: 'password_change',
+        failureReason: 'invalid_current_password',
+        responseStatus: 401,
+        responseBody: responsePayload
+      });
+      return res.status(401).json(responsePayload);
     }
 
     updateUserPassword(req.user.userId, newPassword);
-    logAudit(req.user.userId, 'PASSWORD_CHANGED', null, null, req.ip);
-    res.json({ success: true, message: 'Password changed successfully' });
+
+    const responsePayload = { success: true, message: 'Password changed successfully' };
+
+    logAuditEvent(req, {
+      success: true,
+      event: 'password_change',
+      user: authUser,
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+
+    res.json(responsePayload);
   } catch (err) {
     console.error('Error changing password:', err);
-    res.status(500).json({ error: 'Failed to change password' });
+    const responsePayload = { error: 'Failed to change password' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_change',
+      failureReason: 'password_change_failed',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
@@ -356,14 +697,30 @@ app.post('/api/auth/forgot-password', (req, res) => {
   const { email } = req.body;
 
   if (!email) {
-    return res.status(400).json({ error: 'Email required' });
+    const responsePayload = { error: 'Email required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_reset_request',
+      failureReason: 'missing_email',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   const user = getUserByEmail(email);
 
   if (!user) {
     // Don't reveal if email exists
-    return res.json({ success: true, message: 'If email exists, password reset link will be sent' });
+    const responsePayload = { success: true, message: 'If email exists, password reset link will be sent' };
+    logAuditEvent(req, {
+      success: true,
+      event: 'password_reset_request',
+      additionalDetails: { matchedUser: false },
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+    return res.json(responsePayload);
   }
 
   try {
@@ -386,15 +743,40 @@ app.post('/api/auth/forgot-password', (req, res) => {
     transporter.sendMail(mailOptions, (err) => {
       if (err) {
         console.error('Email error:', err);
-        return res.status(500).json({ error: 'Failed to send reset email' });
+        const responsePayload = { error: 'Failed to send reset email' };
+        logAuditEvent(req, {
+          success: false,
+          event: 'password_reset_request',
+          user: user,
+          failureReason: 'password_reset_email_send_failed',
+          responseStatus: 500,
+          responseBody: responsePayload
+        });
+        return res.status(500).json(responsePayload);
       }
 
-      logAudit(user.id, 'PASSWORD_RESET_REQUESTED', null, null, req.ip);
-      res.json({ success: true, message: 'Password reset email sent' });
+      const responsePayload = { success: true, message: 'Password reset email sent' };
+      logAuditEvent(req, {
+        success: true,
+        event: 'password_reset_request',
+        user: user,
+        additionalDetails: { matchedUser: true },
+        responseStatus: 200,
+        responseBody: responsePayload
+      });
+      res.json(responsePayload);
     });
   } catch (err) {
     console.error('Password reset error:', err);
-    res.status(500).json({ error: 'Invalid email configuration' });
+    const responsePayload = { error: 'Invalid email configuration' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_reset_request',
+      failureReason: 'password_reset_request_failed',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
@@ -403,23 +785,58 @@ app.post('/api/auth/reset-password', (req, res) => {
   const { token, newPassword } = req.body;
 
   if (!token || !newPassword) {
-    return res.status(400).json({ error: 'Token and new password required' });
+    const responsePayload = { error: 'Token and new password required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_reset_complete',
+      failureReason: 'missing_reset_token_or_password',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   const userId = verifyPasswordResetToken(token);
 
   if (!userId) {
-    return res.status(400).json({ error: 'Invalid or expired reset token' });
+    const responsePayload = { error: 'Invalid or expired reset token' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_reset_complete',
+      failureReason: 'invalid_or_expired_reset_token',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   try {
+    const user = getUserById(userId);
     updateUserPassword(userId, newPassword);
     usePasswordResetToken(token);
 
-    logAudit(userId, 'PASSWORD_CHANGED', null, null, req.ip);
-    res.json({ success: true, message: 'Password reset successfully' });
+    const responsePayload = { success: true, message: 'Password reset successfully' };
+
+    logAuditEvent(req, {
+      success: true,
+      event: 'password_reset_complete',
+      user: user,
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+
+    res.json(responsePayload);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to reset password' });
+    const responsePayload = { error: 'Failed to reset password' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'password_reset_complete',
+      user: { userId },
+      failureReason: 'password_reset_failed',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
@@ -441,20 +858,40 @@ app.get('/api/admin/users', authMiddleware, requireAdmin, (req, res) => {
 // Create new user
 app.post('/api/admin/users', authMiddleware, requireAdmin, (req, res) => {
   const { username, email, password, roleId } = req.body;
+  const adminUser = getUserById(req.user.userId);
 
   if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password required' });
+    const responsePayload = { error: 'Username and password required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_create',
+      user: adminUser,
+      failureReason: 'missing_credentials',
+      additionalDetails: { targetUsername: username },
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   if (getUserByUsername(username)) {
-    return res.status(400).json({ error: 'Username already exists' });
+    const responsePayload = { error: 'Username already exists' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_create',
+      user: adminUser,
+      failureReason: 'username_exists',
+      additionalDetails: { targetUsername: username },
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   try {
     const userId = createUser(username, email || null, password, roleId || null);
-    logAudit(req.user.userId, 'USER_CREATED', 'user', { user_id: userId, username }, req.ip);
 
-    res.json({
+    const responsePayload = {
       success: true,
       user: {
         id: userId,
@@ -462,9 +899,25 @@ app.post('/api/admin/users', authMiddleware, requireAdmin, (req, res) => {
         email,
         role_id: roleId || null
       }
+    };
+    logAuditEvent(req, {
+      success: true,
+      event: 'admin_user_create',
+      responseStatus: 200,
+      responseBody: responsePayload
     });
+
+    res.json(responsePayload);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to create user' });
+    const responsePayload = { error: 'Failed to create user' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_create',
+      failureReason: 'database_error',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
@@ -472,10 +925,21 @@ app.post('/api/admin/users', authMiddleware, requireAdmin, (req, res) => {
 app.put('/api/admin/users/:userId', authMiddleware, requireAdmin, (req, res) => {
   const { userId } = req.params;
   const { username, email, status, roleId } = req.body;
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
+  const adminUser = getUserById(req.user.userId);
 
   const existingUser = getUserById(userId);
   if (!existingUser) {
-    return res.status(404).json({ error: 'User not found' });
+    const responsePayload = { error: 'User not found' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_update',
+      failureReason: 'user_not_found',
+      responseStatus: 404,
+      responseBody: responsePayload
+    });
+    return res.status(404).json(responsePayload);
   }
 
   const updates = {};
@@ -488,14 +952,28 @@ app.put('/api/admin/users/:userId', authMiddleware, requireAdmin, (req, res) => 
     updateUser(userId, updates);
     const updatedUser = getUserById(userId);
 
-    logAudit(req.user.userId, 'USER_UPDATED', 'user', { user_id: userId, updates }, req.ip);
-
-    res.json({
+    const responsePayload = {
       success: true,
       user: updatedUser
+    };
+    logAuditEvent(req, {
+      success: true,
+      event: 'admin_user_update',
+      responseStatus: 200,
+      responseBody: responsePayload
     });
+
+    res.json(responsePayload);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to update user' });
+    const responsePayload = { error: 'Failed to update user' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_update',
+      failureReason: 'database_error',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
@@ -503,46 +981,114 @@ app.put('/api/admin/users/:userId', authMiddleware, requireAdmin, (req, res) => 
 app.post('/api/admin/users/:userId/password', authMiddleware, requireAdmin, (req, res) => {
   const { userId } = req.params;
   const { password } = req.body;
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
+  const adminUser = getUserById(req.user.userId);
 
   if (!password) {
-    return res.status(400).json({ error: 'New password required' });
+    const responsePayload = { error: 'New password required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_password_change',
+      failureReason: 'missing_password',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   const user = getUserById(userId);
   if (!user) {
-    return res.status(404).json({ error: 'User not found' });
+    const responsePayload = { error: 'User not found' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_password_change',
+      failureReason: 'user_not_found',
+      responseStatus: 404,
+      responseBody: responsePayload
+    });
+    return res.status(404).json(responsePayload);
   }
 
   try {
     updateUserPassword(userId, password);
-    logAudit(req.user.userId, 'USER_PASSWORD_CHANGED', 'user', { user_id: userId }, req.ip);
 
-    res.json({ success: true, message: 'Password updated' });
+    const responsePayload = { success: true, message: 'Password updated' };
+    logAuditEvent(req, {
+      success: true,
+      event: 'admin_user_password_change',
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+
+    res.json(responsePayload);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to update password' });
+    const responsePayload = { error: 'Failed to update password' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_password_change',
+      failureReason: 'database_error',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
 // Delete user
 app.delete('/api/admin/users/:userId', authMiddleware, requireAdmin, (req, res) => {
   const { userId } = req.params;
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
+  const adminUser = getUserById(req.user.userId);
 
   if (parseInt(userId) === req.user.userId) {
-    return res.status(400).json({ error: 'Cannot delete your own user account' });
+    const responsePayload = { error: 'Cannot delete your own user account' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_delete',
+      failureReason: 'self_deletion_attempt',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   const user = getUserById(userId);
   if (!user) {
-    return res.status(404).json({ error: 'User not found' });
+    const responsePayload = { error: 'User not found' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_delete',
+      failureReason: 'user_not_found',
+      responseStatus: 404,
+      responseBody: responsePayload
+    });
+    return res.status(404).json(responsePayload);
   }
 
   try {
     deleteUser(userId);
-    logAudit(req.user.userId, 'USER_DELETED', 'user', { user_id: userId, username: user.username }, req.ip);
 
-    res.json({ success: true });
+    const responsePayload = { success: true };
+    logAuditEvent(req, {
+      success: true,
+      event: 'admin_user_delete',
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+
+    res.json(responsePayload);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to delete user' });
+    const responsePayload = { error: 'Failed to delete user' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_user_delete',
+      failureReason: 'database_error',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
@@ -570,23 +1116,58 @@ app.get('/api/admin/roles', authMiddleware, requireAdmin, (req, res) => {
 // Create a new role
 app.post('/api/admin/roles', authMiddleware, requireAdmin, (req, res) => {
   const { name, description } = req.body;
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
+  const adminUser = getUserById(req.user.userId);
 
   if (!name || !name.trim()) {
-    return res.status(400).json({ error: 'Role name required' });
+    const responsePayload = { error: 'Role name required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_role_create',
+      failureReason: 'missing_role_name',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   // Check if role name already exists
   const existingRoles = getAllRoles();
   if (existingRoles.some(r => r.name.toLowerCase() === name.toLowerCase())) {
-    return res.status(400).json({ error: 'Role name already exists' });
+    const responsePayload = { error: 'Role name already exists' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_role_create',
+      failureReason: 'role_name_exists',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   try {
     const roleId = createRole(name, description || '');
-    logAudit(req.user.userId, 'ROLE_CREATED', 'role', { role_id: roleId, role_name: name }, req.ip);
-    res.json({ id: roleId, name, description });
+    
+    const responsePayload = { id: roleId, name, description };
+    logAuditEvent(req, {
+      success: true,
+      event: 'admin_role_create',
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+    
+    res.json(responsePayload);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to create role' });
+    const responsePayload = { error: 'Failed to create role' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_role_create',
+      failureReason: 'database_error',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
@@ -594,47 +1175,116 @@ app.post('/api/admin/roles', authMiddleware, requireAdmin, (req, res) => {
 app.put('/api/admin/roles/:roleId', authMiddleware, requireAdmin, (req, res) => {
   const { roleId } = req.params;
   const { name, description } = req.body;
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
+  const adminUser = getUserById(req.user.userId);
 
   const role = getRoleById(roleId);
   if (!role) {
-    return res.status(404).json({ error: 'Role not found' });
+    const responsePayload = { error: 'Role not found' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_role_update',
+      failureReason: 'role_not_found',
+      responseStatus: 404,
+      responseBody: responsePayload
+    });
+    return res.status(404).json(responsePayload);
   }
 
   // Prevent modifying system roles
   if (role.is_system) {
-    return res.status(403).json({ error: 'Cannot modify system roles' });
+    const responsePayload = { error: 'Cannot modify system roles' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_role_update',
+      failureReason: 'system_role_modification_attempt',
+      responseStatus: 403,
+      responseBody: responsePayload
+    });
+    return res.status(403).json(responsePayload);
   }
 
   if (!name || !name.trim()) {
-    return res.status(400).json({ error: 'Role name required' });
+    const responsePayload = { error: 'Role name required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_role_update',
+      failureReason: 'missing_role_name',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   try {
     updateRole(roleId, name, description || '');
-    logAudit(req.user.userId, 'ROLE_UPDATED', 'role', { role_id: roleId, role_name: name }, req.ip);
-    res.json({ success: true });
+    
+    const responsePayload = { success: true };
+    logAuditEvent(req, {
+      success: true,
+      event: 'admin_role_update',
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+    
+    res.json(responsePayload);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to update role' });
+    const responsePayload = { error: 'Failed to update role' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_role_update',
+      failureReason: 'database_error',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
 // Delete a role
 app.delete('/api/admin/roles/:roleId', authMiddleware, requireAdmin, (req, res) => {
   const { roleId } = req.params;
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
+  const adminUser = getUserById(req.user.userId);
 
   const role = getRoleById(roleId);
   if (!role) {
-    return res.status(404).json({ error: 'Role not found' });
+    const responsePayload = { error: 'Role not found' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_role_delete',
+      failureReason: 'role_not_found',
+      responseStatus: 404,
+      responseBody: responsePayload
+    });
+    return res.status(404).json(responsePayload);
   }
 
   // deleteRole returns false if role is system or default
   const deleted = deleteRole(roleId);
   if (!deleted) {
-    return res.status(403).json({ error: 'Cannot delete system or default roles' });
+    const responsePayload = { error: 'Cannot delete system or default roles' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_role_delete',
+      failureReason: 'system_role_deletion_attempt',
+      responseStatus: 403,
+      responseBody: responsePayload
+    });
+    return res.status(403).json(responsePayload);
   }
 
-  logAudit(req.user.userId, 'ROLE_DELETED', 'role', { role_id: roleId, role_name: role.name }, req.ip);
-  res.json({ success: true });
+  const responsePayload = { success: true };
+  logAuditEvent(req, {
+    success: true,
+    event: 'admin_role_delete',
+    responseStatus: 200,
+    responseBody: responsePayload
+  });
+  
+  res.json(responsePayload);
 });
 
 // Get permissions for a role
@@ -658,46 +1308,116 @@ app.get('/api/admin/roles/:roleId/permissions', authMiddleware, requireAdmin, (r
 app.post('/api/admin/roles/:roleId/permissions', authMiddleware, requireAdmin, (req, res) => {
   const { roleId } = req.params;
   const { permissionName } = req.body;
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
+  const adminUser = getUserById(req.user.userId);
 
   if (!permissionName) {
-    return res.status(400).json({ error: 'Permission name required' });
+    const responsePayload = { error: 'Permission name required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_permission_grant',
+      failureReason: 'missing_permission_name',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   const role = getRoleById(roleId);
   if (!role) {
-    return res.status(404).json({ error: 'Role not found' });
+    const responsePayload = { error: 'Role not found' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_permission_grant',
+      failureReason: 'role_not_found',
+      responseStatus: 404,
+      responseBody: responsePayload
+    });
+    return res.status(404).json(responsePayload);
   }
 
   // Verify permission exists
   const allPermissions = getAllPermissions();
   if (!allPermissions.some(p => p.name === permissionName)) {
-    return res.status(400).json({ error: 'Invalid permission name' });
+    const responsePayload = { error: 'Invalid permission name' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_permission_grant',
+      failureReason: 'invalid_permission',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+    return res.status(400).json(responsePayload);
   }
 
   try {
     grantPermissionToRole(roleId, permissionName);
-    logAudit(req.user.userId, 'PERMISSION_GRANTED_TO_ROLE', 'role', { role_id: roleId, permission: permissionName }, req.ip);
-    res.json({ success: true });
+    
+    const responsePayload = { success: true };
+    logAuditEvent(req, {
+      success: true,
+      event: 'admin_permission_grant',
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+    
+    res.json(responsePayload);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to grant permission to role' });
+    const responsePayload = { error: 'Failed to grant permission to role' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_permission_grant',
+      failureReason: 'database_error',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
 // Revoke permission from a role
 app.delete('/api/admin/roles/:roleId/permissions/:permissionName', authMiddleware, requireAdmin, (req, res) => {
   const { roleId, permissionName } = req.params;
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
+  const adminUser = getUserById(req.user.userId);
 
   const role = getRoleById(roleId);
   if (!role) {
-    return res.status(404).json({ error: 'Role not found' });
+    const responsePayload = { error: 'Role not found' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_permission_revoke',
+      failureReason: 'role_not_found',
+      responseStatus: 404,
+      responseBody: responsePayload
+    });
+    return res.status(404).json(responsePayload);
   }
 
   try {
     revokePermissionFromRole(roleId, permissionName);
-    logAudit(req.user.userId, 'PERMISSION_REVOKED_FROM_ROLE', 'role', { role_id: roleId, permission: permissionName }, req.ip);
-    res.json({ success: true });
+    
+    const responsePayload = { success: true };
+    logAuditEvent(req, {
+      success: true,
+      event: 'admin_permission_revoke',
+      responseStatus: 200,
+      responseBody: responsePayload
+    });
+    
+    res.json(responsePayload);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to revoke permission from role' });
+    const responsePayload = { error: 'Failed to revoke permission from role' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'admin_permission_revoke',
+      failureReason: 'database_error',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+    res.status(500).json(responsePayload);
   }
 });
 
@@ -712,15 +1432,35 @@ app.get('/api/admin/header-auth-settings', authMiddleware, requireAdmin, (req, r
 
 app.put('/api/admin/header-auth-settings', authMiddleware, requireAdmin, (req, res) => {
   const { enabled, usernameHeader, allowedRemoteIps } = req.body;
+  const requestPath = req.originalUrl || req.url;
+  const requestHeaders = getAuthRequestHeaders(req);
 
   const normalizedUsernameHeader = (usernameHeader || '').trim();
   if (!normalizedUsernameHeader || !/^[A-Za-z0-9\-]+$/.test(normalizedUsernameHeader)) {
-    return res.status(400).json({ error: 'Invalid username header name' });
+    const responsePayload = { error: 'Invalid username header name' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'header_auth_settings_update',
+      failureReason: 'invalid_header_auth_settings',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+
+    return res.status(400).json(responsePayload);
   }
 
   const allowedText = (allowedRemoteIps || '').trim();
   if (!allowedText) {
-    return res.status(400).json({ error: 'Allowed remote IP list is required' });
+    const responsePayload = { error: 'Allowed remote IP list is required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'header_auth_settings_update',
+      failureReason: 'invalid_header_auth_settings',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+
+    return res.status(400).json(responsePayload);
   }
 
   const allowedEntries = allowedText
@@ -729,12 +1469,30 @@ app.put('/api/admin/header-auth-settings', authMiddleware, requireAdmin, (req, r
     .filter((line) => line.length > 0);
 
   if (allowedEntries.length === 0) {
-    return res.status(400).json({ error: 'At least one allowed remote IP or CIDR is required' });
+    const responsePayload = { error: 'At least one allowed remote IP or CIDR is required' };
+    logAuditEvent(req, {
+      success: false,
+      event: 'header_auth_settings_update',
+      failureReason: 'invalid_header_auth_settings',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+
+    return res.status(400).json(responsePayload);
   }
 
   const invalidEntry = allowedEntries.find((entry) => !isValidIpOrCidr(entry));
   if (invalidEntry) {
-    return res.status(400).json({ error: `Invalid allowed remote IP/CIDR entry: ${invalidEntry}` });
+    const responsePayload = { error: `Invalid allowed remote IP/CIDR entry: ${invalidEntry}` };
+    logAuditEvent(req, {
+      success: false,
+      event: 'header_auth_settings_update',
+      failureReason: 'invalid_header_auth_settings',
+      responseStatus: 400,
+      responseBody: responsePayload
+    });
+
+    return res.status(400).json(responsePayload);
   }
 
   try {
@@ -744,16 +1502,109 @@ app.put('/api/admin/header-auth-settings', authMiddleware, requireAdmin, (req, r
       allowedRemoteIps: allowedEntries.join('\n')
     });
 
-    logAudit(req.user.userId, 'HEADER_AUTH_SETTINGS_UPDATED', 'settings', {
-      enabled: updatedSettings.enabled,
-      usernameHeader: updatedSettings.usernameHeader,
-      allowedRemoteIpsCount: allowedEntries.length
-    }, req.ip);
+    logAuditEvent(req, {
+      success: true,
+      event: 'header_auth_settings_update',
+      additionalDetails: {
+        enabled: updatedSettings.enabled,
+        usernameHeader: updatedSettings.usernameHeader,
+        allowedRemoteIpsCount: allowedEntries.length
+      },
+      responseStatus: 200,
+      responseBody: { success: true, settings: updatedSettings }
+    });
 
     res.json({ success: true, settings: updatedSettings });
   } catch (err) {
     console.error('Failed to update header auth settings:', err);
-    res.status(500).json({ error: 'Failed to update header authentication settings' });
+    const responsePayload = { error: 'Failed to update header authentication settings' };
+
+    logAuditEvent(req, {
+      success: false,
+      event: 'header_auth_settings_update',
+      failureReason: 'header_auth_settings_update_failed',
+      responseStatus: 500,
+      responseBody: responsePayload
+    });
+
+    res.status(500).json(responsePayload);
+  }
+});
+
+app.get('/api/admin/auth-audit-logs', authMiddleware, requireAdmin, (req, res) => {
+  const search = typeof req.query.search === 'string' ? req.query.search : '';
+  const limit = req.query.limit;
+  const offset = req.query.offset;
+
+  try {
+    const result = getAuthAuditLogs({ search, limit, offset });
+
+    const rows = result.rows.map((row) => ({
+      ...row,
+      success: !!row.success,
+      http_headers: row.http_headers ? JSON.parse(row.http_headers) : null,
+      details: row.details ? JSON.parse(row.details) : null,
+      response_data: row.response_data ? JSON.parse(row.response_data) : null
+    }));
+
+    res.json({
+      rows,
+      total: result.total,
+      limit: parseInt(limit, 10) || 100,
+      offset: parseInt(offset, 10) || 0
+    });
+  } catch (err) {
+    console.error('Failed to fetch auth audit logs:', err);
+    res.status(500).json({ error: 'Failed to fetch auth audit logs' });
+  }
+});
+
+app.get('/api/admin/auth-audit-logs/export.csv', authMiddleware, requireAdmin, (req, res) => {
+  const search = typeof req.query.search === 'string' ? req.query.search : '';
+
+  try {
+    const { rows } = getAuthAuditLogs({ search, limit: 10000, offset: 0 });
+    const header = [
+      'occurred_at',
+      'success',
+      'auth_type',
+      'username',
+      'role_name',
+      'source_ip',
+      'request_method',
+      'request_path',
+      'failure_reason',
+      'http_headers',
+      'details'
+    ];
+
+    const csvLines = [header.map(csvEscape).join(',')];
+
+    for (const row of rows) {
+      csvLines.push([
+        row.occurred_at,
+        row.success ? 'success' : 'failure',
+        row.auth_type,
+        row.username,
+        row.role_name,
+        row.source_ip,
+        row.request_method,
+        row.request_path,
+        row.failure_reason,
+        row.http_headers,
+        row.details
+      ].map(csvEscape).join(','));
+    }
+
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const fileName = `auth-audit-log-${timestamp}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(csvLines.join('\n'));
+  } catch (err) {
+    console.error('Failed to export auth audit logs:', err);
+    res.status(500).json({ error: 'Failed to export auth audit logs' });
   }
 });
 
@@ -867,9 +1718,6 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
   const isDebug = !!debug;
   
   // --- End Sanitization ---
-
-  // Log the tool usage
-  logAudit(req.user.userId, `TOOL_EXECUTED`, tool, { host, tool }, req.ip);
 
   // Special handling for bulk nslookup
   if (tool === 'nslookup_bulk') {
@@ -1059,6 +1907,10 @@ app.get('/dashboard', (req, res) => {
 
 app.get('/admin', authMiddleware, requireAdmin, (req, res) => {
   res.render('admin', { activePage: 'admin' });
+});
+
+app.get('/admin/audit-log', authMiddleware, requireAdmin, (req, res) => {
+  res.redirect('/admin');
 });
 
 app.get('/reset-password', (req, res) => {

@@ -25,7 +25,7 @@
         </div>
 
         <!-- Tab Navigation -->
-        <div class="flex gap-4 mb-6 border-b border-gray-200">
+        <div class="flex flex-wrap items-center gap-3 mb-6 border-b border-gray-200">
           <button class="tab-button active px-4 py-2 font-semibold text-gray-700 hover:text-[#9D003A]" data-tab="users-tab">
             Manage Users
           </button>
@@ -34,6 +34,9 @@
           </button>
           <button class="tab-button px-4 py-2 font-semibold text-gray-700 hover:text-[#9D003A]" data-tab="header-auth-tab">
             Header Auth
+          </button>
+          <button class="tab-button px-4 py-2 font-semibold text-gray-700 hover:text-[#9D003A]" data-tab="auth-audit-tab">
+            Audit Log
           </button>
         </div>
 
@@ -259,6 +262,81 @@
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+
+        <div id="auth-audit-tab" class="tab-content">
+          <div class="bg-white rounded-lg shadow p-6 mb-4">
+            <div class="flex flex-wrap items-center gap-3">
+              <h2 class="text-xl font-bold text-gray-900">Authentication Audit Log</h2>
+              <button id="audit-export-csv-btn" type="button" class="ml-auto inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold bg-[#9D003A] hover:bg-[#72002E] text-white rounded transition" title="Export filtered log set to CSV">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16V4m0 12l-4-4m4 4l4-4M4 20h16"/>
+                </svg>
+                Export CSV
+              </button>
+            </div>
+
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div class="md:col-span-2">
+                <label for="audit-search" class="block text-sm font-semibold text-gray-700 mb-1">Filter</label>
+                <div class="flex gap-2">
+                  <input id="audit-search" type="text" placeholder="Search auth type, user, role, source IP, path, reason..." class="flex-1 px-3 py-2 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-[#9D003A] focus:border-transparent focus:outline-none">
+                  <button id="audit-reload-btn" type="button" class="px-3 py-2 border border-gray-300 bg-white hover:bg-gray-50 rounded transition" title="Reload latest entries">
+                    <svg class="w-4 h-4 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">Result Count</label>
+                <div class="px-3 py-2 border border-gray-200 bg-gray-50 rounded text-sm text-gray-700">
+                  <span id="audit-total-count">0</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bg-white rounded-lg shadow overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm table-fixed">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th class="px-3 py-2 text-left font-semibold text-gray-700 w-40">Time</th>
+                    <th class="px-3 py-2 text-left font-semibold text-gray-700 w-20">Status</th>
+                    <th class="px-3 py-2 text-left font-semibold text-gray-700 w-24">Type</th>
+                    <th class="px-3 py-2 text-left font-semibold text-gray-700 w-28">User</th>
+                    <th class="px-3 py-2 text-left font-semibold text-gray-700 w-28">Role</th>
+                    <th class="px-3 py-2 text-left font-semibold text-gray-700 w-28">Source IP</th>
+                    <th class="px-3 py-2 text-left font-semibold text-gray-700 w-44">Request</th>
+                    <th class="px-3 py-2 text-left font-semibold text-gray-700">Response</th>
+                  </tr>
+                </thead>
+                <tbody id="audit-table" class="divide-y divide-gray-200">
+                  <tr>
+                    <td colspan="8" class="px-4 py-4 text-center text-gray-500">Open this tab to load authentication audit entries.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="text-sm text-gray-600" id="audit-page-label">Page 1</div>
+                <div class="flex items-center gap-2">
+                  <label for="audit-page-size" class="text-sm text-gray-600">Show:</label>
+                  <select id="audit-page-size" class="px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#9D003A] focus:border-transparent focus:outline-none">
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </div>
+              </div>
+              <div class="flex gap-2">
+                <button id="audit-prev-btn" type="button" class="px-3 py-1.5 text-sm rounded bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed" disabled>Previous</button>
+                <button id="audit-next-btn" type="button" class="px-3 py-1.5 text-sm rounded bg-gray-200 text-gray-700 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed" disabled>Next</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

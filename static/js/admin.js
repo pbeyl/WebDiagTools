@@ -3,6 +3,12 @@ let allRoles = [];
 let allPermissions = [];
 let requirePasswordChange = false; // set by loadCurrentUser if needed
 let currentUserEmail = '';
+let auditPage = 1;
+let auditPageSize = 25;
+let auditTotal = 0;
+let auditSearchTerm = '';
+let auditSearchTimer = null;
+let auditTabLoaded = false;
 
 // Reset Password Modal element references (needed early for DOMContentLoaded)
 const resetPasswordBtn = document.getElementById('reset-password-btn');
@@ -49,8 +55,216 @@ document.querySelectorAll('.tab-button').forEach((btn) => {
     if (tabName === 'header-auth-tab') {
       loadHeaderAuthSettings();
     }
+
+    if (tabName === 'auth-audit-tab') {
+      loadAuthAuditLogs(1);
+    }
   });
 });
+
+function escapeAttribute(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function compactHeaderField(headers) {
+  if (!headers || typeof headers !== 'object') {
+    return '-';
+  }
+
+  const parts = Object.entries(headers)
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+    .map(([key, value]) => `${key}: ${value}`);
+
+  return parts.length > 0 ? parts.join(' | ') : '-';
+}
+
+function updateAuditPaginationUI() {
+  const pageLabel = document.getElementById('audit-page-label');
+  const totalEl = document.getElementById('audit-total-count');
+  const prevBtn = document.getElementById('audit-prev-btn');
+  const nextBtn = document.getElementById('audit-next-btn');
+
+  if (!pageLabel || !totalEl || !prevBtn || !nextBtn) {
+    return;
+  }
+
+  const totalPages = Math.max(1, Math.ceil(auditTotal / auditPageSize));
+  pageLabel.textContent = `Page ${auditPage} of ${totalPages}`;
+  totalEl.textContent = String(auditTotal);
+
+  prevBtn.disabled = auditPage <= 1;
+  nextBtn.disabled = auditPage >= totalPages;
+}
+
+function renderAuthAuditRows(rows) {
+  const table = document.getElementById('audit-table');
+  if (!table) {
+    return;
+  }
+
+  if (!rows || rows.length === 0) {
+    table.innerHTML = '<tr><td colspan="8" class="px-4 py-4 text-center text-gray-500">No matching authentication events.</td></tr>';
+    return;
+  }
+
+  table.innerHTML = rows.map((row) => {
+    const statusLabel = row.success ? 'Success' : 'Failure';
+    const statusChip = row.success
+      ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">Success</span>'
+      : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-700">Failure</span>';
+    const requestValue = [row.request_method, row.request_path].filter(Boolean).join(' ') || '-';
+    const timeValue = formatDateTime(row.occurred_at);
+    
+    let responseValue = '-';
+    let responseTitle = '-';
+    if (row.response_data) {
+      try {
+        const responseData = typeof row.response_data === 'string' ? JSON.parse(row.response_data) : row.response_data;
+        const responseBody = responseData && Object.prototype.hasOwnProperty.call(responseData, 'body')
+          ? responseData.body
+          : responseData;
+
+        if (responseBody === null || responseBody === undefined || responseBody === '') {
+          responseValue = '-';
+          responseTitle = '-';
+        } else if (typeof responseBody === 'string') {
+          responseValue = responseBody;
+          responseTitle = responseBody;
+        } else {
+          const serializedBody = JSON.stringify(responseBody);
+          responseValue = serializedBody;
+          responseTitle = serializedBody;
+        }
+      } catch (e) {
+        responseValue = String(row.response_data).substring(0, 50);
+        responseTitle = String(row.response_data);
+      }
+    } else if (row.failure_reason) {
+      responseValue = 'Error';
+      responseTitle = row.failure_reason;
+    }
+
+    return `
+      <tr class="h-10">
+        <td class="px-3 py-2 align-middle whitespace-nowrap overflow-hidden text-ellipsis" title="${escapeAttribute(timeValue)}"><div class="truncate">${escapeHtml(timeValue)}</div></td>
+        <td class="px-3 py-2 align-middle whitespace-nowrap" title="${escapeAttribute(statusLabel)}">${statusChip}</td>
+        <td class="px-3 py-2 align-middle whitespace-nowrap overflow-hidden text-ellipsis" title="${escapeAttribute(row.auth_type || '-')}"><div class="truncate">${escapeHtml(row.auth_type || '-')}</div></td>
+        <td class="px-3 py-2 align-middle whitespace-nowrap overflow-hidden text-ellipsis" title="${escapeAttribute(row.username || '-')}"><div class="truncate">${escapeHtml(row.username || '-')}</div></td>
+        <td class="px-3 py-2 align-middle whitespace-nowrap overflow-hidden text-ellipsis" title="${escapeAttribute(row.role_name || '-')}"><div class="truncate">${escapeHtml(row.role_name || '-')}</div></td>
+        <td class="px-3 py-2 align-middle whitespace-nowrap overflow-hidden text-ellipsis" title="${escapeAttribute(row.source_ip || '-')}"><div class="truncate">${escapeHtml(row.source_ip || '-')}</div></td>
+        <td class="px-3 py-2 align-middle whitespace-nowrap overflow-hidden text-ellipsis" title="${escapeAttribute(requestValue)}"><div class="truncate">${escapeHtml(requestValue)}</div></td>
+        <td class="px-3 py-2 align-middle whitespace-nowrap overflow-hidden text-ellipsis" title="${escapeAttribute(responseTitle)}"><div class="truncate">${escapeHtml(responseValue)}</div></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function loadAuthAuditLogs(page = 1) {
+  const table = document.getElementById('audit-table');
+  if (!table) {
+    return;
+  }
+
+  auditTabLoaded = true;
+  auditPage = page;
+  
+  const pageSizeSelect = document.getElementById('audit-page-size');
+  if (pageSizeSelect) {
+    auditPageSize = parseInt(pageSizeSelect.value, 10) || 25;
+  }
+  
+  const offset = (auditPage - 1) * auditPageSize;
+
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', String(auditPageSize));
+    params.set('offset', String(offset));
+    if (auditSearchTerm.trim()) {
+      params.set('search', auditSearchTerm.trim());
+    }
+
+    const response = await fetch(`/api/admin/auth-audit-logs?${params.toString()}`, {
+      credentials: 'same-origin'
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to load authentication audit logs');
+    }
+
+    const payload = await response.json();
+    auditTotal = payload.total || 0;
+    renderAuthAuditRows(payload.rows || []);
+    updateAuditPaginationUI();
+  } catch (err) {
+    showError(err.message);
+    table.innerHTML = '<tr><td colspan="9" class="px-4 py-4 text-center text-red-600">Failed to load authentication audit entries.</td></tr>';
+  }
+}
+
+const auditSearchInput = document.getElementById('audit-search');
+if (auditSearchInput) {
+  auditSearchInput.addEventListener('input', () => {
+    auditSearchTerm = auditSearchInput.value || '';
+    clearTimeout(auditSearchTimer);
+    auditSearchTimer = setTimeout(() => {
+      loadAuthAuditLogs(1);
+    }, 250);
+  });
+}
+
+const auditPrevBtn = document.getElementById('audit-prev-btn');
+if (auditPrevBtn) {
+  auditPrevBtn.addEventListener('click', () => {
+    if (auditPage > 1) {
+      loadAuthAuditLogs(auditPage - 1);
+    }
+  });
+}
+
+const auditNextBtn = document.getElementById('audit-next-btn');
+if (auditNextBtn) {
+  auditNextBtn.addEventListener('click', () => {
+    const totalPages = Math.max(1, Math.ceil(auditTotal / auditPageSize));
+    if (auditPage < totalPages) {
+      loadAuthAuditLogs(auditPage + 1);
+    }
+  });
+}
+
+const auditExportBtn = document.getElementById('audit-export-csv-btn');
+if (auditExportBtn) {
+  auditExportBtn.addEventListener('click', () => {
+    const params = new URLSearchParams();
+    if (auditSearchTerm.trim()) {
+      params.set('search', auditSearchTerm.trim());
+    }
+
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    window.location.href = `/api/admin/auth-audit-logs/export.csv${suffix}`;
+  });
+}
+
+const auditPageSizeSelect = document.getElementById('audit-page-size');
+if (auditPageSizeSelect) {
+  auditPageSizeSelect.addEventListener('change', () => {
+    loadAuthAuditLogs(1);
+  });
+}
+
+const auditReloadBtn = document.getElementById('audit-reload-btn');
+if (auditReloadBtn) {
+  auditReloadBtn.addEventListener('click', () => {
+    loadAuthAuditLogs(auditPage);
+  });
+}
 
 async function loadHeaderAuthSettings() {
   const form = document.getElementById('header-auth-form');
@@ -980,6 +1194,11 @@ if (headerAuthForm) {
         document.getElementById('header-auth-enabled').checked = !!payload.settings.enabled;
         document.getElementById('header-auth-username-header').value = payload.settings.usernameHeader || 'X-Authenticated-User';
         document.getElementById('header-auth-allowed-ips').value = payload.settings.allowedRemoteIps || '0.0.0.0/0';
+
+        const authAuditTab = document.getElementById('auth-audit-tab');
+        if (auditTabLoaded && authAuditTab && authAuditTab.classList.contains('active')) {
+          loadAuthAuditLogs(1);
+        }
       }
     } catch (err) {
       showError(err.message);
