@@ -229,6 +229,7 @@ function initializeToolUI() {
   const resetPasswordModal = document.getElementById('reset-password-modal');
   const cancelResetBtn = document.getElementById('cancel-reset');
   const resetPasswordForm = document.getElementById('reset-password-form');
+  const currentPasswordInput = document.getElementById('current-password');
   const newPasswordInput = document.getElementById('new-password');
   const confirmPasswordInput = document.getElementById('confirm-password');
   const passwordError = document.getElementById('password-error');
@@ -237,7 +238,7 @@ function initializeToolUI() {
   // Open modal
   resetPasswordBtn.addEventListener('click', () => {
     resetPasswordModal.classList.remove('hidden');
-    newPasswordInput.focus();
+    currentPasswordInput.focus();
   });
 
   // Close modal
@@ -274,8 +275,15 @@ function initializeToolUI() {
   resetPasswordForm.addEventListener('submit', async (e) => {
     e.preventDefault();
 
+    const currentPassword = currentPasswordInput.value;
     const newPassword = newPasswordInput.value.trim();
     const confirmPassword = confirmPasswordInput.value.trim();
+
+    if (!currentPassword) {
+      passwordError.textContent = 'Current password is required';
+      passwordError.classList.remove('hidden');
+      return;
+    }
 
     // Validate passwords match
     if (newPassword !== confirmPassword) {
@@ -297,7 +305,7 @@ function initializeToolUI() {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ newPassword })
+        body: JSON.stringify({ currentPassword, newPassword })
       });
 
       if (!response.ok) {

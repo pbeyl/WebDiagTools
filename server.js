@@ -265,7 +265,11 @@ app.post('/api/auth/api-token/revoke', authMiddleware, (req, res) => {
 
 // Change password for authenticated user
 app.post('/api/auth/change-password', authMiddleware, (req, res) => {
-  const { newPassword } = req.body;
+  const { currentPassword, newPassword } = req.body;
+
+  if (!currentPassword) {
+    return res.status(400).json({ error: 'Current password required' });
+  }
 
   if (!newPassword) {
     return res.status(400).json({ error: 'New password required' });
@@ -276,6 +280,11 @@ app.post('/api/auth/change-password', authMiddleware, (req, res) => {
   }
 
   try {
+    const authUser = getUserByUsername(req.user.username);
+    if (!authUser || !verifyPassword(authUser.password_hash, currentPassword)) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
     updateUserPassword(req.user.userId, newPassword);
     logAudit(req.user.userId, 'PASSWORD_CHANGED', null, null, req.ip);
     res.json({ success: true, message: 'Password changed successfully' });
