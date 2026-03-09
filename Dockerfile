@@ -1,5 +1,5 @@
-# Start from a Node.js 18 Alpine image
-FROM node:18-alpine
+# Start from a Node.js 18 Debian slim image
+FROM node:18-bookworm-slim
 
 # Set the working directory
 WORKDIR /app
@@ -11,19 +11,32 @@ WORKDIR /app
 # - mtr: for mtr
 # - openssl: for openssl s_connect
 # - curl: for curl HTTP timing stats
-RUN apk add --no-cache iputils traceroute bind-tools mtr openssl curl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+		iputils-ping \
+		traceroute \
+		dnsutils \
+		mtr \
+		openssl \
+		curl \
+	&& rm -rf /var/lib/apt/lists/*
 
-# Copy package.json and package-lock.json
-COPY package.json ./
+# Copy package manifests
+COPY package.json package-lock.json ./
 
 # Install Node.js dependencies
-RUN npm install
+RUN npm ci
 
 # Create data directory for persistent SQLite database
 RUN mkdir -p /app/data && chown -R node:node /app/data
 
 # Copy the rest of the application source code
 COPY . .
+
+# Build local Tailwind CSS for production
+RUN npm run build:tailwind
+
+# Remove dev dependencies from runtime image
+RUN npm prune --omit=dev
 
 # Expose the port the app runs on
 #EXPOSE 8080

@@ -34,19 +34,37 @@ document.addEventListener('DOMContentLoaded', async () => {
       resetPasswordModal.classList.remove('hidden');
       cancelResetBtn.style.display = 'none';
     }
+
+    // Check URL parameter for tab navigation
+    const urlParams = new URLSearchParams(window.location.search);
+
+    const tabParam = urlParams.get('tab');
+    if (tabParam) {
+      switchToTab(tabParam, false); // Don't update URL on initial load
+    }
   } catch (err) {
     // Authentication failed, redirect handled in loadCurrentUser
   }
 });
 
-// Tab switching
-document.querySelectorAll('.tab-button').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const tabName = btn.dataset.tab;
-    document.querySelectorAll('.tab-button').forEach((b) => b.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach((t) => t.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById(tabName).classList.add('active');
+// Function to switch to a specific tab
+function switchToTab(tabName, updateUrl = true) {
+  document.querySelectorAll('.tab-button').forEach((b) => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach((t) => t.classList.remove('active'));
+  
+  const tabButton = document.querySelector(`.tab-button[data-tab="${tabName}"]`);
+  const tabContent = document.getElementById(tabName);
+  
+  if (tabButton && tabContent) {
+    tabButton.classList.add('active');
+    tabContent.classList.add('active');
+
+    // Update URL without reloading the page
+    if (updateUrl) {
+      const url = new URL(window.location);
+      url.searchParams.set('tab', tabName);
+      window.history.pushState({}, '', url);
+    }
 
     if (tabName === 'roles-tab') {
       loadRolesTab();
@@ -59,6 +77,14 @@ document.querySelectorAll('.tab-button').forEach((btn) => {
     if (tabName === 'auth-audit-tab') {
       loadAuthAuditLogs(1);
     }
+  }
+}
+
+// Tab switching
+document.querySelectorAll('.tab-button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const tabName = btn.dataset.tab;
+    switchToTab(tabName);
   });
 });
 
@@ -945,7 +971,7 @@ function displayRoles(roles) {
 
     row.innerHTML = `
       <td class="px-6 py-4">${escapeHtml(role.name)}${
-      isSystemRole ? '<span class="ml-2 text-xs bg-gray-100 px-2 py-1 rounded">System</span>' : ''
+      isSystemRole ? '<span class="system-role-tag ml-2 text-xs bg-gray-100 px-2 py-1 rounded">System</span>' : ''
     }</td>
       <td class="px-6 py-4">${role.permissionCount || '0'}</td>
       <td class="px-6 py-4 text-center">

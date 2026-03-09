@@ -118,7 +118,7 @@
 
 <header class="bg-white shadow border-b border-gray-200">
   <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-    <h1 class="text-2xl font-bold text-[#9D003A]">NetDiag Toolbox</h1>
+    <h1 class="app-header-title text-2xl font-bold text-[#9D003A]">NetDiag Toolbox</h1>
     <div class="flex items-center gap-4 relative">
       <!-- Header navigation links -->
       <nav class="hidden sm:flex items-center gap-2">
@@ -132,6 +132,12 @@
           </svg>
           Settings
         </a>
+        <!-- Theme toggle button -->
+        <button id="theme-toggle" class="flex items-center px-2 py-2 rounded font-semibold text-sm text-gray-700 hover:bg-[#9D003A] hover:text-white transition" title="Toggle dark mode" aria-label="Toggle dark mode">
+          <span id="theme-toggle-icon" class="inline-flex items-center justify-center" aria-hidden="true">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M20.742 13.045A8.088 8.088 0 0110.955 3.258 9 9 0 1020.742 13.045z"/></svg>
+          </span>
+        </button>
       </nav>
       <!-- User menu button -->
       <button id="user-menu-btn" class="flex items-center gap-1 px-4 py-2 bg-gray-200 hover:bg-[#9D003A] hover:text-white text-gray-900 rounded font-semibold transition">

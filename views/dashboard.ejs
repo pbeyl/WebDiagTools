@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NetDiag Toolbox</title>
   <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/css/tailwind.css">
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body class="h-full font-sans text-gray-900">
+  <%- include('partials/theme-init') %>
   <!-- Main container -->
   <div class="flex flex-col h-full">
 
@@ -140,6 +141,7 @@
     </div>
   </div>
 
+  <script src="/static/js/theme.js"></script>
   <script src="/static/js/dashboard.js"></script>
 
 </body>

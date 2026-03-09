@@ -3,6 +3,73 @@ body {
   height: 100%;
 }
 
+body.dark-mode {
+  background-color: #181818;
+  color: #f3f4f6;
+}
+
+body.dark-mode header,
+body.dark-mode .bg-white,
+body.dark-mode .bg-gray-50,
+body.dark-mode .form-container,
+body.dark-mode .tab-content,
+body.dark-mode #user-menu,
+body.dark-mode #reset-password-modal > div,
+body.dark-mode #user-profile-modal > div {
+  background-color: #1f1f1f !important;
+  color: #f3f4f6 !important;
+}
+
+body.dark-mode .border-gray-100,
+body.dark-mode .border-gray-200,
+body.dark-mode .border-gray-300,
+body.dark-mode .border-gray-700 {
+  border-color: #313131 !important;
+}
+
+body.dark-mode .text-gray-900,
+body.dark-mode .text-gray-800,
+body.dark-mode .text-gray-700,
+body.dark-mode .text-gray-600,
+body.dark-mode .text-gray-500 {
+  color: #e5e7eb !important;
+}
+
+body.dark-mode input,
+body.dark-mode select,
+body.dark-mode textarea {
+  background-color: #1f1f1f !important;
+  color: #f3f4f6 !important;
+  border-color: #313131 !important;
+}
+
+body.dark-mode button,
+body.dark-mode .tab-button,
+body.dark-mode #user-menu-btn,
+body.dark-mode #theme-toggle,
+body.dark-mode .bg-\[\#9D003A\],
+body.dark-mode .hover\:bg-\[\#72002E\]:hover,
+body.dark-mode .bg-gray-200,
+body.dark-mode .bg-gray-300 {
+  background-color: #313131 !important;
+  color: #f3f4f6 !important;
+  border-color: #313131 !important;
+}
+
+body.dark-mode .tab-button.active {
+  background-color: #313131 !important;
+  color: #f3f4f6 !important;
+  border-bottom: 2px solid #313131;
+}
+
+body.dark-mode .hover\:bg-\[\#9D003A\]:hover,
+body.dark-mode .hover\:bg-gray-300:hover,
+body.dark-mode .hover\:bg-gray-400:hover,
+body.dark-mode .hover\:bg-blue-700:hover,
+body.dark-mode .hover\:bg-red-700:hover {
+  background-color: #3b3b3b !important;
+}
+
 /* Dashboard output scrollbar */
 pre::-webkit-scrollbar {
   width: 8px;
@@ -55,5 +122,35 @@ input[type='number']::-webkit-outer-spin-button {
   background-color: #ffffff;
   color: #9d003a;
   border-bottom: 2px solid #9d003a;
+}
+
+.auth-page-bg {
+  background: linear-gradient(to bottom right, #f3f4f6, #e5e7eb);
+}
+
+body.dark-mode.auth-page-bg {
+  background: linear-gradient(to bottom right, #181818, #1f1f1f);
+}
+
+body.dark-mode .auth-card {
+  background-color: #1f1f1f !important;
+  color: #f3f4f6 !important;
+}
+
+body.dark-mode #theme-toggle {
+  background-color: #313131 !important;
+  color: #f3f4f6 !important;
+}
+
+body.dark-mode #theme-toggle:hover {
+  background-color: #3b3b3b !important;
+}
+
+body.dark-mode .system-role-tag {
+  color: #111827 !important;
+}
+
+body.dark-mode .app-header-title {
+  color: #C82E41 !important;
 }
 
