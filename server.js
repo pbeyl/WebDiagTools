@@ -5,6 +5,7 @@ const path = require('path');
 const cookieParser = require('cookie-parser');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const net = require('net');
 
 const {
   getUserById,
@@ -33,11 +34,13 @@ const {
   createOrRotateUserApiToken,
   extendUserApiTokenExpiry,
   revokeUserApiToken,
+  getHeaderAuthConfig,
+  updateHeaderAuthConfig,
   logAudit,
   verifyPassword
 } = require('./db');
 
-const { authMiddleware, requireAdmin, generateToken } = require('./auth');
+const { authMiddleware, requireAdmin, generateToken, tryHeaderAuth } = require('./auth');
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -70,9 +73,16 @@ app.get('/', (req, res) => {
   const token = req.cookies?.token;
   if (token) {
     res.render('dashboard', { activePage: 'dashboard' });
-  } else {
-    res.render('login');
+    return;
   }
+
+  const headerAuthResult = tryHeaderAuth(req);
+  if (headerAuthResult.user) {
+    res.render('dashboard', { activePage: 'dashboard' });
+    return;
+  }
+
+  res.render('login');
 });
 
 // ======================
@@ -190,6 +200,53 @@ function parseLifetimeSeconds(value) {
   }
 
   return parsed;
+}
+
+function normalizeIp(ip) {
+  if (!ip || typeof ip !== 'string') {
+    return null;
+  }
+
+  const trimmed = ip.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const noMappedPrefix = trimmed.startsWith('::ffff:') ? trimmed.slice(7) : trimmed;
+  return net.isIP(noMappedPrefix) ? noMappedPrefix : null;
+}
+
+function isValidIpOrCidr(value) {
+  if (!value || typeof value !== 'string') {
+    return false;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (!trimmed.includes('/')) {
+    return !!normalizeIp(trimmed);
+  }
+
+  const [networkRaw, prefixRaw] = trimmed.split('/');
+  const network = normalizeIp(networkRaw);
+  const prefix = parseInt(prefixRaw, 10);
+
+  if (!network || Number.isNaN(prefix)) {
+    return false;
+  }
+
+  const version = net.isIP(network);
+  if (version === 4) {
+    return prefix >= 0 && prefix <= 32;
+  }
+  if (version === 6) {
+    return prefix >= 0 && prefix <= 128;
+  }
+
+  return false;
 }
 
 // Get authenticated user's bearer token metadata (token value is never returned)
@@ -644,6 +701,62 @@ app.delete('/api/admin/roles/:roleId/permissions/:permissionName', authMiddlewar
   }
 });
 
+app.get('/api/admin/header-auth-settings', authMiddleware, requireAdmin, (req, res) => {
+  try {
+    res.json(getHeaderAuthConfig());
+  } catch (err) {
+    console.error('Failed to load header auth settings:', err);
+    res.status(500).json({ error: 'Failed to load header authentication settings' });
+  }
+});
+
+app.put('/api/admin/header-auth-settings', authMiddleware, requireAdmin, (req, res) => {
+  const { enabled, usernameHeader, allowedRemoteIps } = req.body;
+
+  const normalizedUsernameHeader = (usernameHeader || '').trim();
+  if (!normalizedUsernameHeader || !/^[A-Za-z0-9\-]+$/.test(normalizedUsernameHeader)) {
+    return res.status(400).json({ error: 'Invalid username header name' });
+  }
+
+  const allowedText = (allowedRemoteIps || '').trim();
+  if (!allowedText) {
+    return res.status(400).json({ error: 'Allowed remote IP list is required' });
+  }
+
+  const allowedEntries = allowedText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (allowedEntries.length === 0) {
+    return res.status(400).json({ error: 'At least one allowed remote IP or CIDR is required' });
+  }
+
+  const invalidEntry = allowedEntries.find((entry) => !isValidIpOrCidr(entry));
+  if (invalidEntry) {
+    return res.status(400).json({ error: `Invalid allowed remote IP/CIDR entry: ${invalidEntry}` });
+  }
+
+  try {
+    const updatedSettings = updateHeaderAuthConfig({
+      enabled: !!enabled,
+      usernameHeader: normalizedUsernameHeader,
+      allowedRemoteIps: allowedEntries.join('\n')
+    });
+
+    logAudit(req.user.userId, 'HEADER_AUTH_SETTINGS_UPDATED', 'settings', {
+      enabled: updatedSettings.enabled,
+      usernameHeader: updatedSettings.usernameHeader,
+      allowedRemoteIpsCount: allowedEntries.length
+    }, req.ip);
+
+    res.json({ success: true, settings: updatedSettings });
+  } catch (err) {
+    console.error('Failed to update header auth settings:', err);
+    res.status(500).json({ error: 'Failed to update header authentication settings' });
+  }
+});
+
 // Helper function to execute a command and return output as a promise
 function executeCommand(command, args) {
   return new Promise((resolve, reject) => {
@@ -944,7 +1057,7 @@ app.get('/dashboard', (req, res) => {
   res.render('dashboard', { activePage: 'dashboard' });
 });
 
-app.get('/admin', (req, res) => {
+app.get('/admin', authMiddleware, requireAdmin, (req, res) => {
   res.render('admin', { activePage: 'admin' });
 });
 

@@ -28,6 +28,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
       - ./static:/srv/static:ro
+      - ./logs:/var/log/caddy
 
 volumes:
   caddy_data:

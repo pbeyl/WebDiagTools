@@ -1,21 +1,36 @@
 {$APP_HOST:localhost} {
-  encode gzip
+	encode gzip
 
-  tls internal
+	tls internal
 
-  # Serve static assets directly from Caddy
-  handle_path /static/* {
-    root * /srv/static
-    file_server
-  }
+	log {
+		output file /var/log/caddy/access.log {
+			roll_local_time
+			roll_interval 24h
+			roll_keep 3
+		}
+		format console
+	}
 
-  @rootPath path /
-  handle @rootPath {
-    reverse_proxy {$UPSTREAM:net-tools-app:8080}
-  }
+	log_append request_headers "{http.request.header}"
+	log_append response_headers "{http.response.header}"
 
-  handle {
-    reverse_proxy {$UPSTREAM:net-tools-app:8080}
-  }
+	# Serve static assets directly from Caddy
+	handle_path /static/* {
+		root * /srv/static
+		file_server
+	}
+
+	@rootPath path /
+	handle @rootPath {
+		reverse_proxy {$UPSTREAM:net-tools-app:8080} {
+			header_up remote_ip {http.request.remote.host}
+		}
+	}
+
+	handle {
+		reverse_proxy {$UPSTREAM:net-tools-app:8080} {
+			header_up remote_ip {http.request.remote.host}
+		}
+	}
 }
-

@@ -29,8 +29,10 @@ async function loadUserInfo() {
 
     // Show admin link if user has administration permission
     if (permissions.includes('administration')) {
-      const adminEl = document.getElementById('admin-link') || document.getElementById('header-admin-link');
-      if (adminEl) adminEl.classList.remove('hidden');
+      const desktopAdminLink = document.getElementById('header-admin-link');
+      const mobileAdminLink = document.getElementById('admin-link');
+      if (desktopAdminLink) desktopAdminLink.classList.remove('hidden');
+      if (mobileAdminLink) mobileAdminLink.classList.remove('hidden');
     }
 
     // Filter tools based on permissions

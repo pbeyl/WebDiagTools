@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
-const { getApiTokenOwner, getUserPermissions } = require('./db');
+const net = require('net');
+const { getApiTokenOwner, getUserPermissions, getHeaderAuthConfig, getUserByUsername } = require('./db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
@@ -16,8 +17,251 @@ function extractBearerToken(authHeader) {
   return match[1].trim();
 }
 
+function normalizeIp(ip) {
+  if (!ip || typeof ip !== 'string') {
+    return null;
+  }
+
+  let value = ip.trim();
+  if (!value) {
+    return null;
+  }
+
+  if (value.startsWith('::ffff:')) {
+    value = value.slice(7);
+  }
+
+  return net.isIP(value) ? value : null;
+}
+
+function parseRemoteIpHeader(req) {
+  const xForwardedForValue = req.headers['x-forwarded-for'];
+  if (xForwardedForValue) {
+    const text = Array.isArray(xForwardedForValue) ? xForwardedForValue[0] : xForwardedForValue;
+    if (text && typeof text === 'string') {
+      const leftMostValue = text.split(',')[0].trim();
+      const normalized = normalizeIp(leftMostValue);
+      if (normalized) {
+        return normalized;
+      }
+    }
+  }
+
+  const candidates = ['remote_ip', 'remote-ip', 'x-remote-ip'];
+
+  for (const headerName of candidates) {
+    const rawValue = req.headers[headerName];
+    if (!rawValue) {
+      continue;
+    }
+
+    const text = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+    if (!text || typeof text !== 'string') {
+      continue;
+    }
+
+    const firstValue = text.split(',')[0].trim();
+    const normalized = normalizeIp(firstValue);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+function ipv4ToBigInt(ip) {
+  return ip.split('.').reduce((acc, octet) => (acc << 8n) + BigInt(parseInt(octet, 10)), 0n);
+}
+
+function ipv6ToBigInt(ip) {
+  let input = ip;
+  if (input === '::') {
+    return 0n;
+  }
+
+  const hasCompression = input.includes('::');
+  let left = [];
+  let right = [];
+
+  if (hasCompression) {
+    const parts = input.split('::');
+    left = parts[0] ? parts[0].split(':') : [];
+    right = parts[1] ? parts[1].split(':') : [];
+  } else {
+    left = input.split(':');
+  }
+
+  const normalized = [];
+  normalized.push(...left);
+
+  if (hasCompression) {
+    const missing = 8 - (left.length + right.length);
+    for (let index = 0; index < missing; index += 1) {
+      normalized.push('0');
+    }
+    normalized.push(...right);
+  }
+
+  if (normalized.length !== 8) {
+    return null;
+  }
+
+  let result = 0n;
+  for (const segment of normalized) {
+    const parsed = parseInt(segment || '0', 16);
+    if (Number.isNaN(parsed) || parsed < 0 || parsed > 0xffff) {
+      return null;
+    }
+    result = (result << 16n) + BigInt(parsed);
+  }
+
+  return result;
+}
+
+function ipToBigInt(ip) {
+  const version = net.isIP(ip);
+  if (version === 4) {
+    return { version, value: ipv4ToBigInt(ip) };
+  }
+  if (version === 6) {
+    const value = ipv6ToBigInt(ip);
+    if (value === null) {
+      return null;
+    }
+    return { version, value };
+  }
+  return null;
+}
+
+function isIpAllowedByEntry(ip, entry) {
+  if (!entry) {
+    return false;
+  }
+
+  const trimmed = entry.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (!trimmed.includes('/')) {
+    const normalizedEntryIp = normalizeIp(trimmed);
+    return !!normalizedEntryIp && normalizedEntryIp === ip;
+  }
+
+  const [networkRaw, prefixRaw] = trimmed.split('/');
+  const network = normalizeIp(networkRaw);
+  const prefix = parseInt(prefixRaw, 10);
+
+  if (!network || Number.isNaN(prefix)) {
+    return false;
+  }
+
+  const ipParsed = ipToBigInt(ip);
+  const networkParsed = ipToBigInt(network);
+  if (!ipParsed || !networkParsed || ipParsed.version !== networkParsed.version) {
+    return false;
+  }
+
+  const bitLength = ipParsed.version === 4 ? 32 : 128;
+  if (prefix < 0 || prefix > bitLength) {
+    return false;
+  }
+
+  const hostBits = BigInt(bitLength - prefix);
+  const mask = prefix === 0 ? 0n : ((1n << BigInt(bitLength)) - 1n) ^ ((1n << hostBits) - 1n);
+  return (ipParsed.value & mask) === (networkParsed.value & mask);
+}
+
+function isRemoteIpAllowed(remoteIp, allowedRemoteIpsText) {
+  if (!remoteIp || !allowedRemoteIpsText) {
+    return false;
+  }
+
+  const entries = allowedRemoteIpsText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (entries.length === 0) {
+    return false;
+  }
+
+  return entries.some((entry) => isIpAllowedByEntry(remoteIp, entry));
+}
+
+function getHeaderValue(req, headerName) {
+  if (!headerName) {
+    return null;
+  }
+
+  const rawValue = req.headers[headerName.toLowerCase()];
+  if (!rawValue) {
+    return null;
+  }
+
+  const text = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+  if (!text || typeof text !== 'string') {
+    return null;
+  }
+
+  return text.trim();
+}
+
+function tryHeaderAuth(req) {
+  const headerAuthConfig = getHeaderAuthConfig();
+  if (!headerAuthConfig.enabled) {
+    return { attempted: false, user: null, error: null };
+  }
+
+  const usernameHeaderValue = getHeaderValue(req, headerAuthConfig.usernameHeader);
+  if (!usernameHeaderValue) {
+    return { attempted: false, user: null, error: null };
+  }
+
+  const remoteIp = parseRemoteIpHeader(req);
+  if (!remoteIp || !isRemoteIpAllowed(remoteIp, headerAuthConfig.allowedRemoteIps)) {
+    return {
+      attempted: true,
+      user: null,
+      error: 'Unauthorized: remote_ip not allowed for header authentication'
+    };
+  }
+
+  const user = getUserByUsername(usernameHeaderValue);
+  if (!user || user.status !== 'active') {
+    return {
+      attempted: true,
+      user: null,
+      error: 'Unauthorized: Invalid user in authentication header'
+    };
+  }
+
+  const permissions = getUserPermissions(user.id).map((permission) => permission.name);
+  return {
+    attempted: true,
+    user: {
+      userId: user.id,
+      username: user.username,
+      permissions,
+      authType: 'header'
+    },
+    error: null
+  };
+}
+
 // Middleware to verify JWT token
 function authMiddleware(req, res, next) {
+  const headerAuthResult = tryHeaderAuth(req);
+  if (headerAuthResult.user) {
+    req.user = headerAuthResult.user;
+    return next();
+  }
+
+  if (headerAuthResult.attempted && headerAuthResult.error) {
+    return res.status(401).json({ error: headerAuthResult.error });
+  }
+
   const bearerToken = extractBearerToken(req.headers.authorization);
 
   if (bearerToken) {
@@ -96,6 +340,7 @@ module.exports = {
   authMiddleware,
   requirePermission,
   requireAdmin,
+  tryHeaderAuth,
   generateToken,
   JWT_SECRET
 };

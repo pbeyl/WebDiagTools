@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadCurrentUser();
     await loadRoles();
     await loadUsers();
+    await loadHeaderAuthSettings();
 
     // Check if forced password change required after user is loaded
     if (requirePasswordChange) {
@@ -44,8 +45,33 @@ document.querySelectorAll('.tab-button').forEach((btn) => {
     if (tabName === 'roles-tab') {
       loadRolesTab();
     }
+
+    if (tabName === 'header-auth-tab') {
+      loadHeaderAuthSettings();
+    }
   });
 });
+
+async function loadHeaderAuthSettings() {
+  const form = document.getElementById('header-auth-form');
+  if (!form) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/admin/header-auth-settings', { credentials: 'same-origin' });
+    if (!response.ok) {
+      throw new Error('Failed to load header authentication settings');
+    }
+
+    const settings = await response.json();
+    document.getElementById('header-auth-enabled').checked = !!settings.enabled;
+    document.getElementById('header-auth-username-header').value = settings.usernameHeader || 'X-Authenticated-User';
+    document.getElementById('header-auth-allowed-ips').value = settings.allowedRemoteIps || '0.0.0.0/0';
+  } catch (err) {
+    showError(err.message);
+  }
+}
 
 // Load current user
 async function loadCurrentUser() {
@@ -54,11 +80,19 @@ async function loadCurrentUser() {
     if (!response.ok) throw new Error('Not authenticated');
 
     const data = await response.json();
+    const permissions = data.permissions || [];
     document.getElementById('current-user').textContent = data.user.username;
     currentUserEmail = data.user.email || '';
     // update hidden username display if exists
     const menuName = document.getElementById('current-user');
     if (menuName) menuName.textContent = data.user.username;
+
+    if (permissions.includes('administration')) {
+      const desktopAdminLink = document.getElementById('header-admin-link');
+      const mobileAdminLink = document.getElementById('admin-link');
+      if (desktopAdminLink) desktopAdminLink.classList.remove('hidden');
+      if (mobileAdminLink) mobileAdminLink.classList.remove('hidden');
+    }
 
     if (data.user.forcePasswordChange) {
       requirePasswordChange = true;
@@ -903,5 +937,53 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+const headerAuthForm = document.getElementById('header-auth-form');
+if (headerAuthForm) {
+  headerAuthForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const enabled = document.getElementById('header-auth-enabled').checked;
+    const usernameHeader = document.getElementById('header-auth-username-header').value.trim();
+    const allowedRemoteIps = document.getElementById('header-auth-allowed-ips').value;
+
+    if (!usernameHeader) {
+      showError('Username header is required');
+      return;
+    }
+
+    if (!allowedRemoteIps.trim()) {
+      showError('At least one allowed remote IP or CIDR entry is required');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/admin/header-auth-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          enabled,
+          usernameHeader,
+          allowedRemoteIps
+        })
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Failed to save header authentication settings');
+      }
+
+      showSuccess('Header authentication settings updated successfully');
+      if (payload.settings) {
+        document.getElementById('header-auth-enabled').checked = !!payload.settings.enabled;
+        document.getElementById('header-auth-username-header').value = payload.settings.usernameHeader || 'X-Authenticated-User';
+        document.getElementById('header-auth-allowed-ips').value = payload.settings.allowedRemoteIps || '0.0.0.0/0';
+      }
+    } catch (err) {
+      showError(err.message);
+    }
+  });
 }
 

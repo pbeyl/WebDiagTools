@@ -28,6 +28,11 @@ function hashApiToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function getSettingValue(key) {
+  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+
 // Enable foreign keys
 db.pragma('foreign_keys = ON');
 
@@ -147,6 +152,25 @@ function initializeDatabase() {
     )
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  const defaultSettings = [
+    { key: 'header_auth_enabled', value: '0' },
+    { key: 'header_auth_username_header', value: 'X-Authenticated-User' },
+    { key: 'header_auth_allowed_remote_ips', value: '0.0.0.0/0' }
+  ];
+
+  for (const setting of defaultSettings) {
+    db.prepare('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)')
+      .run(setting.key, setting.value);
+  }
+
   // Create default permissions if they don't exist
   const permissions = [
     { name: 'administration', description: 'Full access to administration and all tools' },
@@ -229,6 +253,40 @@ function initializeDatabase() {
 
 // Functions to interact with database
 const dbFunctions = {
+  getSetting(key) {
+    return getSettingValue(key);
+  },
+
+  setSetting(key, value) {
+    return db.prepare(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(key, value);
+  },
+
+  getHeaderAuthConfig() {
+    const enabledValue = getSettingValue('header_auth_enabled');
+    const usernameHeaderValue = getSettingValue('header_auth_username_header');
+    const allowedRemoteIpsValue = getSettingValue('header_auth_allowed_remote_ips');
+
+    return {
+      enabled: enabledValue === '1',
+      usernameHeader: usernameHeaderValue || 'X-Authenticated-User',
+      allowedRemoteIps: allowedRemoteIpsValue || '0.0.0.0/0'
+    };
+  },
+
+  updateHeaderAuthConfig({ enabled, usernameHeader, allowedRemoteIps }) {
+    dbFunctions.setSetting('header_auth_enabled', enabled ? '1' : '0');
+    dbFunctions.setSetting('header_auth_username_header', usernameHeader || 'X-Authenticated-User');
+    dbFunctions.setSetting('header_auth_allowed_remote_ips', allowedRemoteIps || '0.0.0.0/0');
+
+    return dbFunctions.getHeaderAuthConfig();
+  },
+
   // User operations
   getUserById(userId) {
     return db.prepare(`
