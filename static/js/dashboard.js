@@ -603,41 +603,54 @@ function initializeToolUI() {
       output.textContent = `Running ${tool} on ${host}...\n\n`;
     }
 
-    // Collect all optional parameters
-    let port = null;
-    let protocol = null;
-    let debug = false;
-    let dnsServer = null;
-    let recordType = null;
-    let packetSize = null;
-    let dontFrag = false;
+    const payload = { tool };
 
     if (tool === 'nslookup' || tool === 'nslookup_bulk') {
-      dnsServer = dnsServerInput.value;
-      debug = nslookupDebugCheckbox.checked;
-      recordType = recordTypeSelect.value;
+      const dnsServer = dnsServerInput.value.trim();
+      const debug = nslookupDebugCheckbox.checked;
+      const recordType = recordTypeSelect.value;
+
+      payload.debug = debug;
+      payload.recordType = recordType;
+      if (dnsServer) {
+        payload.dnsServer = dnsServer;
+      }
+
       if (tool === 'nslookup') {
+        payload.host = host;
         output.textContent =
           `Running ${tool} on ${host} (type ${recordType})` +
           (dnsServer ? ` using server ${dnsServer}` : '') +
           `...\n\n`;
       } else {
+        payload.hosts = bulkHosts;
         output.textContent = `Running bulk nslookup (type ${recordType})...\n\n`;
       }
     } else if (tool === 'mtr') {
-      port = mtrPortInput.value || '443';
+      payload.host = host;
+      payload.port = parseInt(mtrPortInput.value || '443', 10);
     } else if (tool === 'openssl_sconnect') {
-      port = portInput.value || '443';
-      debug = opensslDebugCheckbox.checked;
+      payload.host = host;
+      payload.port = parseInt(portInput.value || '443', 10);
+      payload.debug = opensslDebugCheckbox.checked;
     } else if (tool === 'ping') {
-      packetSize = packetSizeInput.value;
-      dontFrag = dontFragCheckbox.checked;
+      payload.host = host;
+      payload.dontFrag = dontFragCheckbox.checked;
+      if (packetSizeInput.value !== '') {
+        payload.packetSize = parseInt(packetSizeInput.value, 10);
+      }
     } else if (tool === 'curl') {
-      protocol = curlHttpsCheckbox.checked ? 'https' : 'http';
-      port = portInput.value;
-      const scheme = protocol === 'https' ? 'https://' : 'http://';
+      payload.host = host;
+      payload.protocol = curlHttpsCheckbox.checked ? 'https' : 'http';
+      const port = portInput.value;
+      if (port !== '') {
+        payload.port = parseInt(port, 10);
+      }
+      const scheme = payload.protocol === 'https' ? 'https://' : 'http://';
       const portSuffix = port ? `:${port}` : '';
       output.textContent = `Running HTTP timing stats on ${scheme}${host}${portSuffix}...\n\n`;
+    } else {
+      payload.host = host;
     }
 
     try {
@@ -646,18 +659,7 @@ function initializeToolUI() {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          tool,
-          host: tool === 'nslookup_bulk' ? undefined : host,
-          hosts: tool === 'nslookup_bulk' ? bulkHosts : undefined,
-          dnsServer: dnsServer || undefined,
-          recordType: recordType || undefined,
-          packetSize: packetSize || undefined,
-          dontFrag: dontFrag || undefined,
-          port: port || undefined,
-          protocol: protocol || undefined,
-          debug
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {

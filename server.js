@@ -1634,10 +1634,224 @@ function executeCommand(command, args) {
   });
 }
 
+function formatCliCommand(command, args) {
+  const shellSafePattern = /^[A-Za-z0-9_@%+=:,./:-]+$/;
+  const formatArg = (value) => {
+    const text = String(value);
+    if (shellSafePattern.test(text)) {
+      return text;
+    }
+    return `'${text.replace(/'/g, `'"'"'`)}'`;
+  };
+
+  return [command, ...args].map(formatArg).join(' ');
+}
+
+const TOOL_NAMES = ['ping', 'nslookup', 'nslookup_bulk', 'traceroute', 'mtr', 'openssl_sconnect', 'curl'];
+const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SOA', 'PTR', 'SRV', 'ANY'];
+const HOST_VALUE_PATTERN = /^[a-zA-Z0-9.:-_]+$/;
+const MAX_HOST_VALUE_LENGTH = 255;
+const MAX_BULK_HOSTS = 200;
+
+const TOOL_INPUT_SCHEMAS = {
+  ping: {
+    required: ['tool', 'host'],
+    optional: ['packetSize', 'dontFrag']
+  },
+  nslookup: {
+    required: ['tool', 'host'],
+    optional: ['dnsServer', 'recordType', 'debug']
+  },
+  nslookup_bulk: {
+    required: ['tool', 'hosts'],
+    optional: ['dnsServer', 'recordType', 'debug']
+  },
+  traceroute: {
+    required: ['tool', 'host'],
+    optional: []
+  },
+  mtr: {
+    required: ['tool', 'host'],
+    optional: ['port']
+  },
+  openssl_sconnect: {
+    required: ['tool', 'host'],
+    optional: ['port', 'debug']
+  },
+  curl: {
+    required: ['tool', 'host'],
+    optional: ['port', 'protocol']
+  }
+};
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeHostLikeValue(value, fieldName) {
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid ${fieldName}: must be a string`);
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`Invalid ${fieldName}: value is required`);
+  }
+
+  if (trimmed.length > MAX_HOST_VALUE_LENGTH) {
+    throw new Error(`Invalid ${fieldName}: value is too long`);
+  }
+
+  if (!HOST_VALUE_PATTERN.test(trimmed)) {
+    throw new Error(`Invalid ${fieldName}`);
+  }
+
+  return trimmed;
+}
+
+function normalizeOptionalBoolean(value, fieldName) {
+  if (value === undefined) {
+    return false;
+  }
+
+  if (typeof value !== 'boolean') {
+    throw new Error(`Invalid ${fieldName}: must be a boolean`);
+  }
+
+  return value;
+}
+
+function normalizeOptionalIntegerInRange(value, fieldName, min, max) {
+  if (value === undefined) {
+    return null;
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw new Error(`Invalid ${fieldName}: must be an integer`);
+  }
+
+  if (value < min || value > max) {
+    throw new Error(`Invalid ${fieldName}: must be between ${min} and ${max}`);
+  }
+
+  return value;
+}
+
+function validateToolInputSchema(body) {
+  if (!isPlainObject(body)) {
+    throw new Error('Invalid request body');
+  }
+
+  if (typeof body.tool !== 'string') {
+    throw new Error('Invalid tool specified.');
+  }
+
+  const tool = body.tool.trim();
+  if (!TOOL_NAMES.includes(tool)) {
+    throw new Error('Invalid tool specified.');
+  }
+
+  const schema = TOOL_INPUT_SCHEMAS[tool];
+  const allowedKeys = new Set(['tool', ...schema.required.filter((key) => key !== 'tool'), ...schema.optional]);
+  const unknownKey = Object.keys(body).find((key) => !allowedKeys.has(key));
+  if (unknownKey) {
+    throw new Error(`Unexpected field: ${unknownKey}`);
+  }
+
+  const missingField = schema.required.find((field) => body[field] === undefined);
+  if (missingField) {
+    throw new Error(`Missing required field: ${missingField}`);
+  }
+
+  const normalized = { tool };
+
+  if (tool === 'nslookup_bulk') {
+    if (typeof body.hosts !== 'string') {
+      throw new Error('Invalid hosts: must be a string');
+    }
+
+    const hostList = body.hosts
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+
+    if (hostList.length === 0) {
+      throw new Error('Please provide hosts for bulk lookup.');
+    }
+
+    if (hostList.length > MAX_BULK_HOSTS) {
+      throw new Error(`Too many hosts provided. Maximum is ${MAX_BULK_HOSTS}.`);
+    }
+
+    normalized.hostList = hostList.map((hostValue) => normalizeHostLikeValue(hostValue, 'host'));
+  } else {
+    normalized.host = normalizeHostLikeValue(body.host, 'host');
+  }
+
+  if (body.dnsServer !== undefined) {
+    normalized.dnsServer = normalizeHostLikeValue(body.dnsServer, 'dnsServer');
+  } else {
+    normalized.dnsServer = null;
+  }
+
+  if (body.recordType !== undefined) {
+    if (typeof body.recordType !== 'string') {
+      throw new Error('Invalid DNS record type specified.');
+    }
+    const up = body.recordType.trim().toUpperCase();
+    if (!DNS_RECORD_TYPES.includes(up)) {
+      throw new Error('Invalid DNS record type specified.');
+    }
+    normalized.recordType = up;
+  } else {
+    normalized.recordType = null;
+  }
+
+  normalized.packetSize = normalizeOptionalIntegerInRange(body.packetSize, 'packetSize', 0, 65535);
+  normalized.dontFrag = normalizeOptionalBoolean(body.dontFrag, 'dontFrag');
+  normalized.port = normalizeOptionalIntegerInRange(body.port, 'port', 1, 65535);
+
+  if (body.protocol !== undefined) {
+    if (typeof body.protocol !== 'string') {
+      throw new Error('Invalid protocol specified.');
+    }
+
+    const protocolValue = body.protocol.trim().toLowerCase();
+    if (!['http', 'https'].includes(protocolValue)) {
+      throw new Error('Invalid protocol specified.');
+    }
+
+    normalized.protocol = protocolValue;
+  } else {
+    normalized.protocol = null;
+  }
+
+  normalized.debug = normalizeOptionalBoolean(body.debug, 'debug');
+
+  return normalized;
+}
+
 // API endpoint to run network tools
 app.post('/api/net-tool', authMiddleware, (req, res) => {
-  // Destructure new parameters
-  const { tool, host, hosts, dnsServer, recordType, packetSize, dontFrag, port, protocol, debug } = req.body;
+  let validatedInput;
+  try {
+    validatedInput = validateToolInputSchema(req.body);
+  } catch (err) {
+    return res.status(400).send(`Error: ${err.message}`);
+  }
+
+  const {
+    tool,
+    host,
+    hostList,
+    dnsServer,
+    recordType,
+    packetSize,
+    dontFrag,
+    port,
+    protocol,
+    debug
+  } = validatedInput;
 
   // Check if user has permission for this tool
   const toolPermission = `tool_${tool}`;
@@ -1648,77 +1862,7 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
     return res.status(403).json({ error: `Permission denied: Access to ${tool} tool not granted` });
   }
 
-  // --- Input Sanitization and Command Building ---
-
-  // Whitelist allowed tools
-  if (!['ping', 'nslookup', 'nslookup_bulk', 'traceroute', 'mtr', 'openssl_sconnect', 'curl'].includes(tool)) {
-    return res.status(400).send('Error: Invalid tool specified.');
-  }
-
-  // Sanitize host: Allow FQDNs, IPv4, and IPv6
-  // For bulk nslookup, host is not required
-  if (tool !== 'nslookup_bulk' && (!host || !/^[a-zA-Z0-9\.:\-\_]+$/.test(host))) {
-    return res.status(400).send('Error: Invalid hostname or IP address.');
-  }
-
-  // Validate hosts for bulk nslookup
-  if (tool === 'nslookup_bulk' && !hosts) {
-    return res.status(400).send('Error: Please provide hosts for bulk lookup.');
-  }
-
-  // Sanitize DNS server (if provided)
-  if (dnsServer && !/^[a-zA-Z0-9\.:\-\_]+$/.test(dnsServer)) {
-    return res.status(400).send('Error: Invalid DNS server address.');
-  }
-
-  // Validate and normalize record type (if provided)
-  let validRecordType = null;
-  if (recordType) {
-    const allowedTypes = ['A','AAAA','CNAME','MX','TXT','NS','SOA','PTR','SRV','ANY'];
-    const up = recordType.toString().toUpperCase();
-    if (allowedTypes.includes(up)) {
-      validRecordType = up;
-    } else {
-      return res.status(400).send('Error: Invalid DNS record type specified.');
-    }
-  }
-
-  // Validate ping packet size and don't fragment (if provided)
-  let validPacketSize = null;
-  const dontFragment = !!dontFrag;
-  if (packetSize) {
-    const ps = parseInt(packetSize, 10);
-    if (!isNaN(ps) && ps >= 0 && ps <= 65535) {
-      validPacketSize = ps;
-    } else {
-      return res.status(400).send('Error: Invalid packet size specified.');
-    }
-  }
-  
-  // Sanitize Port (if provided)
-  let validPort = null;
-  if (port) {
-    const parsedPort = parseInt(port, 10);
-    if (!isNaN(parsedPort) && parsedPort > 0 && parsedPort <= 65535) {
-      validPort = parsedPort;
-    } else {
-      return res.status(400).send('Error: Invalid port specified.');
-    }
-  }
-  const connectPort = validPort || 443; // Default to 443
-  
-  // Sanitize Protocol (if provided)
-  if (protocol) {
-    const allowedProtocols = ['tcp', 'udp', 'http', 'https'];
-    if (!allowedProtocols.includes(protocol)) {
-      return res.status(400).send('Error: Invalid protocol specified.');
-    }
-  }
-  
-  // Sanitize Debug (if provided)
-  const isDebug = !!debug;
-  
-  // --- End Sanitization ---
+  const connectPort = port || 443;
 
   // Special handling for bulk nslookup
   if (tool === 'nslookup_bulk') {
@@ -1727,45 +1871,30 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
 
     (async () => {
       try {
-        // Parse hosts from the input (one per line)
-        const hostList = hosts
-          .split('\n')
-          .map(h => h.trim())
-          .filter(h => h.length > 0);
-
-        if (hostList.length === 0) {
-          res.write('Error: No valid hosts provided.');
-          res.end();
-          return;
-        }
-
         res.write(`Performing NSLookup on ${hostList.length} host(s)...\n\n`);
 
         // Process each host sequentially
         for (let i = 0; i < hostList.length; i++) {
           const queryHost = hostList[i];
 
-          // Validate each host
-          if (!/^[a-zA-Z0-9\.:\-\_]+$/.test(queryHost)) {
-            res.write(`\n[${i + 1}/${hostList.length}] Skipping invalid host: ${queryHost}\n`);
-            continue;
-          }
-
           res.write(`\n[${i + 1}/${hostList.length}] NSLookup: ${queryHost}\n`);
           res.write(`${'='.repeat(60)}\n`);
 
           try {
             const args = [];
-            if (isDebug) {
+            if (debug) {
               args.push('-debug');
             }
-            if (validRecordType) {
-              args.push(`-type=${validRecordType}`);
+            if (recordType) {
+              args.push(`-type=${recordType}`);
             }
             args.push(queryHost);
             if (dnsServer) {
               args.push(dnsServer);
             }
+
+            const displayedCommand = formatCliCommand('nslookup', args);
+            res.write(`Command: ${displayedCommand}\n\n`);
 
             const output = await executeCommand('nslookup', args);
             res.write(output);
@@ -1792,10 +1921,10 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
     case 'ping':
       command = 'ping';
       args = ['-c', '4'];
-      if (validPacketSize !== null) {
-        args.push('-s', validPacketSize.toString());
+      if (packetSize !== null) {
+        args.push('-s', packetSize.toString());
       }
-      if (dontFragment) {
+      if (dontFrag) {
         // ping options vary; try common flags
         args.push('-M', 'do');
         args.push('-D');
@@ -1806,11 +1935,11 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
     case 'nslookup':
       command = 'nslookup';
       args = [];
-      if (isDebug) {
+      if (debug) {
         args.push('-debug');
       }
-      if (validRecordType) {
-        args.push(`-type=${validRecordType}`);
+      if (recordType) {
+        args.push(`-type=${recordType}`);
       }
       args.push(host);
       if (dnsServer) {
@@ -1827,7 +1956,7 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
       // -r (report mode), -c 5 (5 cycles), -n (no DNS)
       args = ['-r', '-w', '-b', '--tcp'];
       
-      if (validPort) {
+      if (port) {
         args.push('-P', connectPort.toString());
       }
       args.push(host);
@@ -1842,7 +1971,7 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
         '-connect', `${host}:${connectPort}`, // host:port
         '-servername', host                 // SNI support
       ];      
-      if (!isDebug) {
+      if (!debug) {
         args.push('-brief');
       } else {
         args.push('-showcerts');
@@ -1852,14 +1981,14 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
     case 'curl':
       command = 'curl';
       const curlProtocol = (protocol === 'http') ? 'http' : 'https';
-      const curlPort = validPort ? `:${validPort}` : '';
+      const curlPort = port ? `:${port}` : '';
       const curlUrl = `${curlProtocol}://${host}${curlPort}`;
       args = [
         '-s',
         '-S',
         '-k',
         '-o', '/dev/null',
-        '-w', '\nHTTP Code: %{http_code}\nDNS Lookup: %{time_namelookup}s\nTLS Handshake: %{time_appconnect}s\nTime to First Byte: %{time_starttransfer}s\nTotal Time: %{time_total}s\n',
+        '-w', '\nHTTP Code, DNS Lookup: %{time_namelookup}s\nTLS Handshake: %{time_appconnect}s\nTime to First Byte: %{time_starttransfer}s\nTotal Time: %{time_total}s\n',
         curlUrl
       ];
       break;
@@ -1868,6 +1997,9 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
   // --- Process Execution ---
   res.setHeader('Content-Type', 'text/plain');
   res.setHeader('Transfer-Encoding', 'chunked');
+
+  const displayedCommand = formatCliCommand(command, args);
+  res.write(`Command: ${displayedCommand}\n\n`);
 
   const child = spawn(command, args);
 

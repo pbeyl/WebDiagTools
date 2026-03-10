@@ -12,6 +12,7 @@ WORKDIR /app
 # - openssl: for openssl s_connect
 # - curl: for curl HTTP timing stats
 RUN apt-get update && apt-get install -y --no-install-recommends \
+		ca-certificates \
 		iputils-ping \
 		traceroute \
 		dnsutils \
