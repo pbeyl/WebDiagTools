@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const { spawn } = require('child_process');
+const jwt = require('jsonwebtoken');
 const path = require('path');
 const cookieParser = require('cookie-parser');
 const nodemailer = require('nodemailer');
@@ -41,7 +42,7 @@ const {
   verifyPassword
 } = require('./db');
 
-const { authMiddleware, requireAdmin, generateToken, tryHeaderAuth } = require('./auth');
+const { authMiddleware, requireAdmin, generateToken, tryHeaderAuth, JWT_SECRET } = require('./auth');
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -59,6 +60,132 @@ app.set('trust proxy', true);
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
+
+function parsePositiveIntEnv(name, fallbackValue) {
+  const rawValue = process.env[name];
+  if (rawValue === undefined) {
+    return fallbackValue;
+  }
+
+  const parsed = parseInt(rawValue, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    return fallbackValue;
+  }
+
+  return parsed;
+}
+
+const API_RATE_LIMIT_MAX_REQUESTS = parsePositiveIntEnv('API_RATE_LIMIT_MAX_REQUESTS', 4);
+const API_RATE_LIMIT_WINDOW_MS = parsePositiveIntEnv('API_RATE_LIMIT_WINDOW_MS', 1000);
+const apiRateLimitStore = new Map();
+
+function getHeaderAuthIdentity(req) {
+  const config = getHeaderAuthConfig();
+  if (!config || !config.enabled || !config.usernameHeader) {
+    return null;
+  }
+
+  const headerName = String(config.usernameHeader).trim().toLowerCase();
+  if (!headerName) {
+    return null;
+  }
+
+  const rawValue = req.headers[headerName];
+  const value = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized ? `header:${normalized}` : null;
+}
+
+function getBearerTokenIdentity(req) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || typeof authHeader !== 'string') {
+    return null;
+  }
+
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const token = match[1].trim();
+  if (!token) {
+    return null;
+  }
+
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  return `bearer:${tokenHash}`;
+}
+
+function getCookieUserIdentity(req) {
+  const token = req.cookies?.token;
+  if (!token || typeof token !== 'string') {
+    return null;
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded?.userId) {
+      return `user:${decoded.userId}`;
+    }
+  } catch (err) {
+    return null;
+  }
+
+  return null;
+}
+
+function getRateLimitKey(req) {
+  return (
+    getHeaderAuthIdentity(req)
+    || getBearerTokenIdentity(req)
+    || getCookieUserIdentity(req)
+    || `ip:${req.ip || 'unknown'}`
+  );
+}
+
+function apiRateLimitMiddleware(req, res, next) {
+  const key = getRateLimitKey(req);
+  const now = Date.now();
+  const windowStart = now - (now % API_RATE_LIMIT_WINDOW_MS);
+
+  let entry = apiRateLimitStore.get(key);
+  if (!entry || entry.windowStart !== windowStart) {
+    entry = { windowStart, count: 0 };
+  }
+
+  entry.count += 1;
+  apiRateLimitStore.set(key, entry);
+
+  const remaining = Math.max(0, API_RATE_LIMIT_MAX_REQUESTS - entry.count);
+  res.setHeader('X-RateLimit-Limit', API_RATE_LIMIT_MAX_REQUESTS.toString());
+  res.setHeader('X-RateLimit-Remaining', remaining.toString());
+  res.setHeader('X-RateLimit-Window-Ms', API_RATE_LIMIT_WINDOW_MS.toString());
+
+  if (entry.count > API_RATE_LIMIT_MAX_REQUESTS) {
+    const retryAfterSeconds = Math.ceil((windowStart + API_RATE_LIMIT_WINDOW_MS - now) / 1000);
+    res.setHeader('Retry-After', Math.max(1, retryAfterSeconds).toString());
+    return res.status(429).json({
+      error: `Rate limit exceeded: maximum ${API_RATE_LIMIT_MAX_REQUESTS} requests per ${API_RATE_LIMIT_WINDOW_MS}ms`
+    });
+  }
+
+  next();
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - (API_RATE_LIMIT_WINDOW_MS * 2);
+  for (const [key, entry] of apiRateLimitStore.entries()) {
+    if (entry.windowStart < cutoff) {
+      apiRateLimitStore.delete(key);
+    }
+  }
+}, 30000).unref();
+
+app.use('/api', apiRateLimitMiddleware);
 
 // Email transporter setup
 const transporter = nodemailer.createTransport({
@@ -1609,26 +1736,88 @@ app.get('/api/admin/auth-audit-logs/export.csv', authMiddleware, requireAdmin, (
   }
 });
 
+const NET_TOOL_REQUEST_TIMEOUT_MS = parsePositiveIntEnv('NET_TOOL_REQUEST_TIMEOUT_MS', 15000);
+const NET_TOOL_MAX_OUTPUT_BYTES = parsePositiveIntEnv('NET_TOOL_MAX_OUTPUT_BYTES', 262144);
+const PROCESS_KILL_GRACE_MS = 1000;
+
+function terminateChildProcess(child) {
+  if (!child || child.killed) {
+    return;
+  }
+
+  child.kill('SIGTERM');
+  setTimeout(() => {
+    if (!child.killed) {
+      child.kill('SIGKILL');
+    }
+  }, PROCESS_KILL_GRACE_MS).unref();
+}
+
 // Helper function to execute a command and return output as a promise
-function executeCommand(command, args) {
+function executeCommand(command, args, options = {}) {
+  const timeoutMs = options.timeoutMs || NET_TOOL_REQUEST_TIMEOUT_MS;
+  const maxOutputBytes = options.maxOutputBytes || NET_TOOL_MAX_OUTPUT_BYTES;
+
   return new Promise((resolve, reject) => {
     const child = spawn(command, args);
     let output = '';
-    let errorOutput = '';
+    let outputBytes = 0;
+    let timedOut = false;
+    let outputLimitReached = false;
+
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      terminateChildProcess(child);
+    }, timeoutMs);
+
+    const appendChunk = (data) => {
+      if (outputLimitReached) {
+        return;
+      }
+
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+      const remainingBytes = maxOutputBytes - outputBytes;
+
+      if (remainingBytes <= 0) {
+        outputLimitReached = true;
+        terminateChildProcess(child);
+        return;
+      }
+
+      if (buffer.length <= remainingBytes) {
+        output += buffer.toString();
+        outputBytes += buffer.length;
+        return;
+      }
+
+      output += buffer.subarray(0, remainingBytes).toString();
+      outputBytes += remainingBytes;
+      outputLimitReached = true;
+      terminateChildProcess(child);
+    };
 
     child.stdout.on('data', (data) => {
-      output += data.toString();
+      appendChunk(data);
     });
 
     child.stderr.on('data', (data) => {
-      errorOutput += data.toString();
+      appendChunk(data);
     });
 
     child.on('close', (code) => {
-      resolve(output + errorOutput);
+      clearTimeout(timeoutHandle);
+
+      if (timedOut) {
+        output += '\n--- Command timeout exceeded; process terminated ---\n';
+      } else if (outputLimitReached) {
+        output += '\n--- Command output limit reached; process terminated ---\n';
+      }
+
+      resolve(output);
     });
 
     child.on('error', (err) => {
+      clearTimeout(timeoutHandle);
       reject(err);
     });
   });
@@ -1854,9 +2043,12 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
   } = validatedInput;
 
   // Check if user has permission for this tool
-  const toolPermission = `tool_${tool}`;
+  const toolPermissionCandidates =
+    tool === 'openssl_sconnect'
+      ? ['tool_openssl']
+      : [`tool_${tool}`];
   const hasAdmin = req.user.permissions.includes('administration');
-  const hasToolPerm = req.user.permissions.includes(toolPermission);
+  const hasToolPerm = toolPermissionCandidates.some((permission) => req.user.permissions.includes(permission));
 
   if (!hasAdmin && !hasToolPerm) {
     return res.status(403).json({ error: `Permission denied: Access to ${tool} tool not granted` });
@@ -1869,16 +2061,68 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Transfer-Encoding', 'chunked');
 
+    const requestStartedAt = Date.now();
+    const requestDeadline = requestStartedAt + NET_TOOL_REQUEST_TIMEOUT_MS;
+    let outputBytes = 0;
+    let responseClosed = false;
+
+    const writeWithLimit = (chunk) => {
+      if (responseClosed) {
+        return false;
+      }
+
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      const remainingBytes = NET_TOOL_MAX_OUTPUT_BYTES - outputBytes;
+
+      if (remainingBytes <= 0) {
+        return false;
+      }
+
+      if (buffer.length <= remainingBytes) {
+        res.write(buffer);
+        outputBytes += buffer.length;
+        return true;
+      }
+
+      res.write(buffer.subarray(0, remainingBytes));
+      outputBytes += remainingBytes;
+      return false;
+    };
+
+    const endBulkResponse = (message) => {
+      if (responseClosed) {
+        return;
+      }
+      res.write(`\n--- ${message} ---`);
+      res.end();
+      responseClosed = true;
+    };
+
     (async () => {
       try {
-        res.write(`Performing NSLookup on ${hostList.length} host(s)...\n\n`);
+        if (!writeWithLimit(`Performing NSLookup on ${hostList.length} host(s)...\n\n`)) {
+          endBulkResponse('Output limit reached; request terminated');
+          return;
+        }
 
         // Process each host sequentially
         for (let i = 0; i < hostList.length; i++) {
+          if (Date.now() >= requestDeadline) {
+            endBulkResponse('Request timeout exceeded; processing terminated');
+            return;
+          }
+
           const queryHost = hostList[i];
 
-          res.write(`\n[${i + 1}/${hostList.length}] NSLookup: ${queryHost}\n`);
-          res.write(`${'='.repeat(60)}\n`);
+          if (!writeWithLimit(`\n[${i + 1}/${hostList.length}] NSLookup: ${queryHost}\n`)) {
+            endBulkResponse('Output limit reached; request terminated');
+            return;
+          }
+
+          if (!writeWithLimit(`${'='.repeat(60)}\n`)) {
+            endBulkResponse('Output limit reached; request terminated');
+            return;
+          }
 
           try {
             const args = [];
@@ -1894,21 +2138,46 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
             }
 
             const displayedCommand = formatCliCommand('nslookup', args);
-            res.write(`Command: ${displayedCommand}\n\n`);
+            if (!writeWithLimit(`Command: ${displayedCommand}\n\n`)) {
+              endBulkResponse('Output limit reached; request terminated');
+              return;
+            }
 
-            const output = await executeCommand('nslookup', args);
-            res.write(output);
+            const remainingRequestMs = requestDeadline - Date.now();
+            if (remainingRequestMs <= 0) {
+              endBulkResponse('Request timeout exceeded; processing terminated');
+              return;
+            }
+
+            const remainingOutputBytes = NET_TOOL_MAX_OUTPUT_BYTES - outputBytes;
+            if (remainingOutputBytes <= 0) {
+              endBulkResponse('Output limit reached; request terminated');
+              return;
+            }
+
+            const output = await executeCommand('nslookup', args, {
+              timeoutMs: remainingRequestMs,
+              maxOutputBytes: remainingOutputBytes
+            });
+
+            if (!writeWithLimit(output)) {
+              endBulkResponse('Output limit reached; request terminated');
+              return;
+            }
           } catch (err) {
-            res.write(`Error executing nslookup: ${err.message}\n`);
+            if (!writeWithLimit(`Error executing nslookup: ${err.message}\n`)) {
+              endBulkResponse('Output limit reached; request terminated');
+              return;
+            }
           }
         }
 
-        res.write(`\n\n--- Bulk NSLookup completed ---`);
+        writeWithLimit(`\n\n--- Bulk NSLookup completed ---`);
         res.end();
+        responseClosed = true;
       } catch (err) {
         console.error('Bulk nslookup error:', err);
-        res.write(`\n--- ERROR: ${err.message} ---`);
-        res.end();
+        endBulkResponse(`ERROR: ${err.message}`);
       }
     })();
     return; // Exit early, don't process further
@@ -1954,7 +2223,7 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
     case 'mtr':
       command = 'mtr';
       // -r (report mode), -c 5 (5 cycles), -n (no DNS)
-      args = ['-r', '-w', '-b', '--tcp'];
+      args = ['-r', '-c 1', '-w', '-b', '--tcp'];
       
       if (port) {
         args.push('-P', connectPort.toString());
@@ -1988,7 +2257,7 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
         '-S',
         '-k',
         '-o', '/dev/null',
-        '-w', '\nHTTP Code, DNS Lookup: %{time_namelookup}s\nTLS Handshake: %{time_appconnect}s\nTime to First Byte: %{time_starttransfer}s\nTotal Time: %{time_total}s\n',
+        '-w', '\nHTTP Code, DNS Lookup(sec), TLS Handshake(sec), Time to First Byte(sec), Total Time(sec)\n%{http_code}, %{time_namelookup}, %{time_appconnect}, %{time_starttransfer}, %{time_total}\n',
         curlUrl
       ];
       break;
@@ -1998,10 +2267,56 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
   res.setHeader('Content-Type', 'text/plain');
   res.setHeader('Transfer-Encoding', 'chunked');
 
+  let outputBytes = 0;
+  let responseClosed = false;
+  let terminationReason = null;
+
+  const writeWithLimit = (chunk) => {
+    if (responseClosed) {
+      return false;
+    }
+
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    const remainingBytes = NET_TOOL_MAX_OUTPUT_BYTES - outputBytes;
+
+    if (remainingBytes <= 0) {
+      return false;
+    }
+
+    if (buffer.length <= remainingBytes) {
+      res.write(buffer);
+      outputBytes += buffer.length;
+      return true;
+    }
+
+    res.write(buffer.subarray(0, remainingBytes));
+    outputBytes += remainingBytes;
+    return false;
+  };
+
+  const endStreamResponse = (message) => {
+    if (responseClosed) {
+      return;
+    }
+
+    if (message) {
+      res.write(message);
+    }
+    res.end();
+    responseClosed = true;
+  };
+
   const displayedCommand = formatCliCommand(command, args);
-  res.write(`Command: ${displayedCommand}\n\n`);
+  if (!writeWithLimit(`Command: ${displayedCommand}\n\n`)) {
+    return endStreamResponse('\n--- Output limit reached; request terminated ---');
+  }
 
   const child = spawn(command, args);
+
+  const timeoutHandle = setTimeout(() => {
+    terminationReason = 'timeout';
+    terminateChildProcess(child);
+  }, NET_TOOL_REQUEST_TIMEOUT_MS);
 
   // For openssl s_client, we need to send 'Q' to cleanly exit
   if (tool === 'openssl_sconnect') {
@@ -2011,25 +2326,42 @@ app.post('/api/net-tool', authMiddleware, (req, res) => {
 
   // Stream stdout
   child.stdout.on('data', (data) => {
-    res.write(data);
+    if (!writeWithLimit(data)) {
+      terminationReason = 'output_cap';
+      terminateChildProcess(child);
+    }
   });
 
   // Stream stderr
   child.stderr.on('data', (data) => {
-    res.write(data);
+    if (!writeWithLimit(data)) {
+      terminationReason = 'output_cap';
+      terminateChildProcess(child);
+    }
   });
 
   // Handle process exit
   child.on('close', (code) => {
-    res.write(`\n--- Process finished ---`);
-    res.end();
+    clearTimeout(timeoutHandle);
+
+    if (terminationReason === 'timeout') {
+      endStreamResponse('\n--- Request timeout exceeded; process terminated ---');
+      return;
+    }
+
+    if (terminationReason === 'output_cap') {
+      endStreamResponse('\n--- Output limit reached; process terminated ---');
+      return;
+    }
+
+    endStreamResponse(`\n--- Process finished ---`);
   });
 
   // Handle errors
   child.on('error', (err) => {
+    clearTimeout(timeoutHandle);
     console.error(`Failed to start subprocess: ${err}`);
-    res.write(`\n--- ERROR: Failed to start subprocess ${err.message} ---`);
-    res.end();
+    endStreamResponse(`\n--- ERROR: Failed to start subprocess ${err.message} ---`);
   });
 });
 

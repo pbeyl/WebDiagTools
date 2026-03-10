@@ -202,6 +202,26 @@ curl -N -X POST http://localhost:8080/api/net-tool \
 
 The server streams subprocess `stdout` and `stderr` directly back in the response.
 
+## Environment Variables (Security Controls)
+
+The following optional variables can be set in `.env` to tune runtime protections:
+
+- `NET_TOOL_REQUEST_TIMEOUT_MS` (default: `15000`)
+	- Maximum runtime per `/api/net-tool` request before subprocesses are terminated.
+- `NET_TOOL_MAX_OUTPUT_BYTES` (default: `262144`)
+	- Maximum total response output size per `/api/net-tool` request.
+- `API_RATE_LIMIT_MAX_REQUESTS` (default: `4`)
+	- Maximum number of `/api/*` requests allowed per rate-limit window.
+- `API_RATE_LIMIT_WINDOW_MS` (default: `1000`)
+	- Duration of the rate-limit window in milliseconds.
+
+Rate-limit identities are determined in this order:
+
+1. Header-auth username (when trusted header auth is enabled)
+2. Bearer token (hashed for keying)
+3. Cookie-auth user (`userId` from JWT)
+4. Source IP fallback
+
 ## Authentication Audit Log
 
 Admins can access **Settings → Auth Audit Log** to review authentication activity.

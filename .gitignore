@@ -33,3 +33,5 @@ data/
 .docker/
 
 # Misc.DS_Store
+logs/
+planning/
