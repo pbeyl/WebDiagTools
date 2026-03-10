@@ -45,6 +45,7 @@ const { authMiddleware, requireAdmin, generateToken, tryHeaderAuth } = require('
 
 const app = express();
 const port = process.env.PORT || 8080;
+const bindHost = process.env.BIND_HOST || '0.0.0.0';
 const appUrl = process.env.APP_URL || '';
 const isProduction = process.env.NODE_ENV === 'production';
 const cookieSecure = appUrl.startsWith('https://') || (!appUrl && isProduction);
@@ -1920,7 +1921,7 @@ app.get('/reset-password', (req, res) => {
 // Serve static assets
 app.use('/static', express.static(path.join(__dirname, 'static')));
 
-app.listen(port, () => {
-  console.log(`ZTNA Net-Tools listening on port ${port}`);
+app.listen(port, bindHost, () => {
+  console.log(`ZTNA Net-Tools listening on ${bindHost}:${port}`);
 });
 
