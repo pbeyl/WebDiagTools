@@ -95,7 +95,7 @@ Admins can reset a user password from the Docker host CLI.
 Run:
 
 ```bash
-docker compose exec net-tools-app npm run admin:reset-password -- --username alice
+docker compose exec webdiagtools npm run admin:reset-password -- --username alice
 ```
 
 ## API Usage
