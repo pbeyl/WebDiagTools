@@ -20,96 +20,73 @@ Web-based network diagnostic toolset that exposes common tools (ping, nslookup, 
 
 ## Prerequisites
 
-Before running the app, ensure one of the following environments is available.
+Install the following tools before starting:
 
-- Docker (recommended) or Node.js 18+ and npm/yarn to run locally
-- On Linux hosts (or containers) the following system packages are required for full functionality:
-	- `iputils-ping` (provides `ping`)
-	- `traceroute` (provides `traceroute`)
-	- `dnsutils` (provides `nslookup` / `dig`)
-	- `mtr` (provides `mtr`)
-	- `openssl` (provides `openssl s_client`)
+- Git
+- Docker Engine
+- Docker Compose (Docker CLI plugin)
 
-Note: Running network tools such as `ping`, `traceroute`, and `mtr` from inside a container often requires elevated network capabilities. The container examples below grant `NET_RAW` and `NET_ADMIN` capabilities; you can also use `network_mode: host` on Linux.
-
-## Ubuntu (20.04 / 22.04 / 24.04) — Installation Guide
-
-Follow these steps to prepare an Ubuntu machine to run the app locally or build the Docker image.
-
-1) Update packages and install system requirements (for host-based runs):
+Example package install on Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install -y iputils-ping traceroute dnsutils mtr openssl curl ca-certificates
-```
-
-2) (Optional but recommended) Install Node.js 18+ via NodeSource (for running locally without Docker):
-
-```bash
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs build-essential
-node -v
-npm -v
-```
-
-3) Install Docker (if you plan to run via Docker):
-
-```bash
-sudo apt install -y docker.io docker-compose
+sudo apt install -y git docker.io docker-compose-plugin
 sudo systemctl enable --now docker
-sudo usermod -aG docker $USER  # optional: allows running docker without sudo (re-login required)
 ```
 
-With these prerequisites satisfied you can either run the project using Docker (recommended) or run it locally with Node.
+## Installation Guide
 
-## Run with Docker (recommended)
-
-The repository includes a `Dockerfile` and `docker-compose.yaml` for an easy build + run.
-
-Build and run with Docker Compose (with Caddy reverse proxy and self-signed TLS):
+1. Clone the repository and enter the project directory:
 
 ```bash
-# From the project root (where docker-compose.yaml lives)
+git clone https://github.com/pbeyl/WebDiagTools.git
+cd WebDiagTools
+```
+
+2. Create your environment file:
+
+```bash
+cp .env.example .env
+```
+
+3. Edit `.env` and set these values:
+
+- `JWT_SECRET`: set a strong secret (example: `openssl rand -base64 32`)
+- `APP_HOST`: hostname only, for example `tools.example.com`
+
+`APP_HOST` should match the DNS A record of the target host.
+
+## Run with Docker (Recommended)
+
+From the project root, start the stack:
+
+```bash
+docker compose up -d
+```
+
+To build the WebDiagTools image locally with Docker Compose, ensure the `webdiagtools` service in `docker-compose.yaml` uses the `build:` block and does not use the `image:` line.
+
+- Uncomment these lines for local builds:
+	- `build:`
+	- `context: .`
+	- `network: host`
+- Comment this line out for local builds:
+	- `#image: pbeyl/webdiagtools:latest`
+
+Then build and start locally:
+
+```bash
 docker compose up --build -d
-# or with classic docker-compose
-docker-compose up --build -d
 ```
 
-By default, Caddy will:
+After the containers are running:
 
-- Terminate HTTPS with a self-signed certificate issued by its internal CA.
-- Serve the app on the hostname from `APP_HOST` (which must match the host part of `APP_URL`).
-- Reverse proxy requests to the application container on port `8080`.
+1. Open `https://${APP_HOST}` in your browser.
+2. Sign in with the default admin credentials:
+   - Username: `admin`
+   - Password: `admin`
 
-Once running, open your browser to your configured URL, for example: `https://tools.example.com`. Because the certificate is self-signed, you will need to trust it in your browser/OS.
-
-If you need raw network capabilities (ICMP, traceroute, mtr) the compose file already requests `NET_RAW` and `NET_ADMIN` capabilities; for a Linux host you may alternatively use the provided linux variant which uses `network_mode: host`:
-
-```bash
-# linux-specific compose override (uses host networking)
-docker compose -f docker-compose.yaml -f docker-compose.linux.yaml up --build -d
-```
-
-Or build and run the container manually (example with capabilities, without Caddy/TLS):
-
-```bash
-docker build -t net-tools .
-docker run --rm -it -p 8080:8080 --cap-add=NET_RAW --cap-add=NET_ADMIN --name net-tools net-tools
-```
-
-Open your browser to: http://localhost:8080
-
-## Run Locally (without Docker)
-
-1. Install Node.js 18+ and the system packages listed in "Prerequisites".
-2. From the project root:
-
-```bash
-npm install
-npm start
-```
-
-The server listens on port `8080` by default. Visit http://localhost:8080
+Note: The default TLS certificate is self-signed by Caddy. Your browser may show a certificate warning until you trust it.
 
 ## Admin Password Reset From Docker Host CLI
 

@@ -1,28 +1,32 @@
 services:
-  net-tools-app:
-    build: 
-      context: .
-      network: host
+  webdiagtools:
+    #build:
+    #  context: .
+    #  network: host
+    image: pbeyl/webdiagtools:latest
+    ports: [] # disable port mapping
+    environment:
+      BIND_HOST: 127.0.0.1
     cap_add:
       - NET_RAW
       - NET_ADMIN
     volumes:
       - ./data:/app/data
+    network_mode: host
     restart: always
-    container_name: net-tools
+    container_name: webdiagtools
 
   caddy:
     image: caddy:2
     container_name: caddy
     depends_on:
-      - net-tools-app
+      - webdiagtools
+    network_mode: host
     restart: always
-    ports:
-      - "80:80"
-      - "443:443"
+    ports: [] # disable port mapping when using host networking
     environment:
       APP_HOST: ${APP_HOST}
-      UPSTREAM: net-tools-app:8080
+      UPSTREAM: 127.0.0.1:8080
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

@@ -47,7 +47,7 @@ const { authMiddleware, requireAdmin, generateToken, tryHeaderAuth, JWT_SECRET }
 const app = express();
 const port = process.env.PORT || 8080;
 const bindHost = process.env.BIND_HOST || '0.0.0.0';
-const appUrl = process.env.APP_URL || '';
+const appUrl = ('https://' + process.env.APP_HOST) || '';
 const isProduction = process.env.NODE_ENV === 'production';
 const cookieSecure = appUrl.startsWith('https://') || (!appUrl && isProduction);
 
@@ -853,7 +853,7 @@ app.post('/api/auth/forgot-password', (req, res) => {
 
   try {
     const resetToken = createPasswordResetToken(user.id);
-    const resetUrl = `${process.env.APP_URL || 'http://localhost:8080'}/reset-password?token=${resetToken}`;
+    const resetUrl = `${('https://' + process.env.APP_HOST) || 'http://localhost:8080'}/reset-password?token=${resetToken}`;
 
     const mailOptions = {
       from: process.env.SMTP_FROM || 'noreply@ztna-tools.local',
