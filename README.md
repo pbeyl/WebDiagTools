@@ -9,6 +9,7 @@ Web-based network diagnostic toolset that exposes common tools (ping, nslookup, 
 - Role-based access control with user accounts and permissions
 - Administrative panel for user and permission management
 - Password reset via email link
+- Admin password reset from Docker host CLI
 - In-app “Reset Password” option (menu) for authenticated users
 - Streaming command output to the browser
 - API endpoint for programmatic use: `/api/net-tool` (requires login)
@@ -109,6 +110,16 @@ npm start
 ```
 
 The server listens on port `8080` by default. Visit http://localhost:8080
+
+## Admin Password Reset From Docker Host CLI
+
+Admins can reset a user password from the Docker host CLI.
+
+Run:
+
+```bash
+docker compose exec net-tools-app npm run admin:reset-password -- --username alice
+```
 
 ## API Usage
 
@@ -244,7 +255,7 @@ Storage design: authentication audit entries are persisted in SQLite (`auth_audi
 - `server.js` — Express server and tool execution logic (API implementation)
 - `dashboard.html` — Front-end UI
 - `Dockerfile` — Container image definition
-- `docker-compose.yaml` and `docker-compos.linux.yaml` — Compose files for container runs
+- `docker-compose.yaml` — Compose file for container runs
 
 ## Contributing
 

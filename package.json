@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "admin:reset-password": "node scripts/admin-reset-password.js",
     "build:tailwind": "tailwindcss -c tailwind.config.js -i ./static/css/tailwind.input.css -o ./static/css/tailwind.css --minify",
     "watch:tailwind": "tailwindcss -c tailwind.config.js -i ./static/css/tailwind.input.css -o ./static/css/tailwind.css --watch"
   },
